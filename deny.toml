@@ -1,6 +1,15 @@
 [advisories]
 version = 2
 yanked = "deny"
+# All transitive, pulled by neo4rs (and rmcp's TLS stack). These are
+# "unmaintained" advisories, not vulnerabilities; they leave when neo4rs updates
+# its tree. Revisit on each neo4rs bump.
+ignore = [
+    "RUSTSEC-2024-0384", # instant   <- backoff <- neo4rs
+    "RUSTSEC-2024-0436", # paste     <- neo4rs
+    "RUSTSEC-2025-0012", # backoff   <- neo4rs
+    "RUSTSEC-2025-0134", # rustls-pemfile <- neo4rs / rustls-native-certs
+]
 
 [licenses]
 version = 2

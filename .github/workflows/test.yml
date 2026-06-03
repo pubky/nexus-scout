@@ -41,5 +41,12 @@ jobs:
             sleep 2
           done
       - name: Provision read-only user
-        run: cat scripts/neo4j_reader_setup.cypher | docker exec -i "$(docker ps -qf ancestor=neo4j:5.26-community)" cypher-shell -u neo4j -p testtest12
+        # The reader role's GRANT/DENY lines are Enterprise-only and error on
+        # Community (no RBAC), so CI only creates the user. The integration suite
+        # is edition-aware and asserts the Community reality (sanitizer is the
+        # sole write guard); see docs/adr/0002-defense-in-depth.md.
+        run: |
+          docker exec -i "$(docker ps -qf ancestor=neo4j:5.26-community)" \
+            cypher-shell -u neo4j -p testtest12 \
+            "CREATE USER nexus_scout_reader IF NOT EXISTS SET PASSWORD 'change-me-in-production' SET PASSWORD CHANGE NOT REQUIRED;"
       - run: cargo nextest run -p nexus-scout --features integration

@@ -120,7 +120,7 @@ impl Default for ConfigBuilder {
             neo4j_uri: "bolt://localhost:7687".to_owned(),
             neo4j_user: "neo4j".to_owned(),
             neo4j_password: Secret::new(String::new()),
-            query_timeout: Duration::from_millis(10_000),
+            query_timeout: Duration::from_secs(10),
             limits: Limits::default(),
             max_query_length: guard.max_query_length,
             max_path_depth: guard.max_path_depth,
@@ -248,7 +248,7 @@ mod tests {
         let cfg = Config::builder().build();
         assert_eq!(cfg.limits.default_limit, 25);
         assert_eq!(cfg.limits.max_result_rows, 100);
-        assert_eq!(cfg.query_timeout, Duration::from_millis(10_000));
+        assert_eq!(cfg.query_timeout, Duration::from_secs(10));
         assert_eq!(cfg.limits.guard.max_query_length, 2000);
         assert_eq!(cfg.limits.guard.max_path_depth, 5);
     }
