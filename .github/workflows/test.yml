@@ -1,0 +1,45 @@
+name: test
+on:
+  push:
+    branches: [main]
+  pull_request:
+concurrency:
+  group: test-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  # DB-free gate: sanitizer corpus, property tests, contract tests, the seal test.
+  unit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@nextest
+      - run: cargo nextest run --workspace
+      - run: cargo build -p nexus-scout --no-default-features
+
+  # DB-backed gate: end-to-end queries + the read-only-user refusal matrix.
+  integration:
+    runs-on: ubuntu-latest
+    services:
+      neo4j:
+        image: neo4j:5.26-community
+        env:
+          NEO4J_AUTH: neo4j/testtest12
+        ports:
+          - 7687:7687
+          - 7474:7474
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@nextest
+      - name: Wait for Neo4j
+        run: |
+          for i in $(seq 1 30); do
+            nc -z 127.0.0.1 7687 && break
+            sleep 2
+          done
+      - name: Provision read-only user
+        run: cat scripts/neo4j_reader_setup.cypher | docker exec -i "$(docker ps -qf ancestor=neo4j:5.26-community)" cypher-shell -u neo4j -p testtest12
+      - run: cargo nextest run -p nexus-scout --features integration

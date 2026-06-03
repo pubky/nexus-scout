@@ -1,0 +1,118 @@
+//! Pure, read-only Cypher sanitizer.
+//!
+//! `cypher-guard` validates that an untrusted Cypher query is side-effect free
+//! (read-only) before it is executed, and rewrites a small set of unbounded
+//! constructs into bounded ones. It performs no I/O and depends on no database
+//! driver, so it can be unit-, property-, and fuzz-tested in isolation.
+//!
+//! The crate's central guarantee is the [`SanitizedQuery`] proof token: it can
+//! only be produced by [`Sanitizer::sanitize`], so a consumer cannot execute a
+//! query that has not passed validation.
+//!
+//! # Examples
+//!
+//! ```
+//! use cypher_guard::{Sanitizer, Limits};
+//!
+//! let sanitizer = Sanitizer::new(Limits::default());
+//! let q = sanitizer.sanitize("MATCH (u:User) RETURN u.name").unwrap();
+//! assert!(q.cypher().contains("MATCH"));
+//!
+//! assert!(sanitizer.sanitize("MATCH (u) DETACH DELETE u").is_err());
+//! ```
+
+#![deny(missing_docs)]
+
+mod error;
+mod rules;
+mod sanitized;
+mod tokenizer;
+mod transforms;
+mod unicode;
+
+#[doc(inline)]
+pub use error::{RejectReason, SanitizeError};
+#[doc(inline)]
+pub use sanitized::SanitizedQuery;
+
+/// The keywords the sanitizer rejects in keyword position (mutation and
+/// administration clauses).
+///
+/// Exposed so out-of-crate checks - notably the fuzz oracle - assert against the
+/// same single source of truth the classifier uses, rather than a copy that can
+/// drift.
+#[must_use]
+pub fn denied_keywords() -> Vec<&'static str> {
+    rules::denied_keywords()
+}
+
+/// Guardrail limits applied during sanitization; [`Limits::default`] matches the
+/// spec defaults.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct Limits {
+    /// Maximum query length in characters, checked after Unicode normalization.
+    /// Bounds lexer work and is a coarse denial-of-service guard.
+    pub max_query_length: usize,
+    /// Classic variable-length relationship paths (`-[:R*]->`, `*2..`) are capped
+    /// at this depth (e.g. rewritten to `*1..5`). NOTE: this does not cover Neo4j
+    /// 5 quantified path patterns (`(...)+`, `(...){1,n}`); those are a traversal
+    /// cost concern bounded by the server-side transaction timeout, not by the
+    /// sanitizer. The sanitizer's job is read-only enforcement, not cost control.
+    pub max_path_depth: u32,
+}
+
+impl Limits {
+    /// Creates limits with an explicit query length and path depth.
+    #[must_use]
+    pub fn new(max_query_length: usize, max_path_depth: u32) -> Self {
+        Self {
+            max_query_length,
+            max_path_depth,
+        }
+    }
+}
+
+impl Default for Limits {
+    fn default() -> Self {
+        Self::new(2000, 5)
+    }
+}
+
+/// Validates and transforms untrusted Cypher into a [`SanitizedQuery`].
+#[derive(Debug, Clone)]
+pub struct Sanitizer {
+    limits: Limits,
+}
+
+impl Sanitizer {
+    /// Creates a sanitizer with the given guardrail limits.
+    #[must_use]
+    pub fn new(limits: Limits) -> Self {
+        Self { limits }
+    }
+
+    /// Validates that `cypher` is read-only and returns an executable proof token.
+    ///
+    /// The query is normalized, lexed, classified against an allow/deny policy,
+    /// and has unbounded variable-length paths rewritten to be bounded.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SanitizeError`] if the query contains a forbidden construct
+    /// (mutation, administration clause, namespaced call, comment, semicolon),
+    /// uses an unsupported keyword, has a non-ASCII character in keyword
+    /// position, is unterminated, or exceeds the configured length.
+    pub fn sanitize(&self, cypher: impl AsRef<str>) -> Result<SanitizedQuery, SanitizeError> {
+        let normalized = unicode::normalize_and_validate(cypher.as_ref())?;
+
+        if normalized.chars().count() > self.limits.max_query_length {
+            return Err(SanitizeError::new(RejectReason::TooLong, None));
+        }
+
+        let tokens = tokenizer::lex(&normalized)?;
+        rules::classify(&tokens, &normalized)?;
+        let bounded = transforms::bound_paths(&normalized, &tokens, self.limits.max_path_depth);
+        Ok(SanitizedQuery::new(bounded))
+    }
+}

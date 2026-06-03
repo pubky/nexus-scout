@@ -1,0 +1,40 @@
+[workspace]
+resolver = "2"
+members = ["crates/cypher-guard", "crates/nexus-scout"]
+
+[workspace.package]
+edition = "2021"
+license = "MIT"
+repository = "https://github.com/pubky/nexus-scout"
+rust-version = "1.85"
+
+# Public-API dependencies: a major bump here is a breaking release of both
+# crates (they appear in public signatures). neo4rs is pinned to match the
+# version nexus runs in production; bump only in lockstep with nexus-common.
+[workspace.dependencies]
+serde = { version = "1.0.219", features = ["derive"] }
+serde_json = { version = "1.0.149", features = ["preserve_order"] }
+tokio = { version = "1.52", features = ["macros", "rt-multi-thread", "time"] }
+clap = { version = "4.6", features = ["derive"] }
+unicode-normalization = "0.1"
+base64 = "0.22"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+neo4rs = "=0.8.0"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+unsafe_op_in_unsafe_fn = "warn"
+missing_debug_implementations = "warn"
+
+[workspace.lints.clippy]
+# Enabled at `warn` so local `cargo build`/`test` stay green; CI promotes the
+# whole set with `cargo clippy -- -D warnings`.
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+allow_attributes_without_reason = "warn"
+undocumented_unsafe_blocks = "warn"
+unused_result_ok = "warn"
+
+[profile.release]
+strip = true
