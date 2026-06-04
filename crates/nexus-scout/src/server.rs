@@ -16,6 +16,7 @@ use crate::{Config, Error, Scout};
 
 /// Parameters for the `query_cypher` tool.
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 struct QueryCypherParams {
     /// A read-only Cypher query.
     cypher: String,
@@ -64,7 +65,10 @@ impl ScoutServer {
             // A rejected/timed-out query is a normal tool outcome the agent can
             // react to, so it is returned as an error-flagged result, not a
             // protocol error.
-            Err(err) => Ok(CallToolResult::structured_error(error_value(&err))),
+            Err(err) => {
+                let value = serde_json::to_value(err.to_response()).unwrap_or_else(|_| Value::String(err.to_string()));
+                Ok(CallToolResult::structured_error(value))
+            }
         }
     }
 
@@ -93,10 +97,6 @@ impl ServerHandler for ScoutServer {
         );
         info
     }
-}
-
-fn error_value(err: &Error) -> Value {
-    serde_json::to_value(err.to_response()).unwrap_or_else(|_| Value::String(err.to_string()))
 }
 
 /// Runs the MCP server over stdio until the client disconnects.

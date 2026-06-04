@@ -73,9 +73,14 @@ impl Limits {
     }
 }
 
+/// Default maximum query length in characters (spec §8).
+const DEFAULT_MAX_QUERY_LENGTH: usize = 2000;
+/// Default cap on variable-length relationship path depth (spec §8).
+const DEFAULT_MAX_PATH_DEPTH: u32 = 5;
+
 impl Default for Limits {
     fn default() -> Self {
-        Self::new(2000, 5)
+        Self::new(DEFAULT_MAX_QUERY_LENGTH, DEFAULT_MAX_PATH_DEPTH)
     }
 }
 
@@ -104,7 +109,17 @@ impl Sanitizer {
     /// uses an unsupported keyword, has a non-ASCII character in keyword
     /// position, is unterminated, or exceeds the configured length.
     pub fn sanitize(&self, cypher: impl AsRef<str>) -> Result<SanitizedQuery, SanitizeError> {
-        let normalized = unicode::normalize_and_validate(cypher.as_ref())?;
+        let cypher = cypher.as_ref();
+
+        // Cheap up-front guard: the post-normalization length cap is in characters,
+        // so a valid query is at most `max_query_length * 4` UTF-8 bytes. Reject a
+        // larger raw input here, before the O(n) NFC normalization allocates a copy
+        // of an attacker-sized string.
+        if cypher.len() > self.limits.max_query_length.saturating_mul(4) {
+            return Err(SanitizeError::new(RejectReason::TooLong, None));
+        }
+
+        let normalized = unicode::normalize_and_validate(cypher)?;
 
         if normalized.chars().count() > self.limits.max_query_length {
             return Err(SanitizeError::new(RejectReason::TooLong, None));

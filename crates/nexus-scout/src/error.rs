@@ -8,7 +8,6 @@
 use std::backtrace::Backtrace;
 
 use cypher_guard::SanitizeError;
-use serde::Serialize;
 
 use crate::response::ErrorResponse;
 
@@ -18,8 +17,7 @@ type BoxError = Box<dyn std::error::Error + Send + Sync>;
 ///
 /// `#[non_exhaustive]`: matching on it requires a wildcard arm. `RateLimited` is
 /// reserved for a future per-agent rate limiter and is not produced in the MVP.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum ErrorCode {
     /// The sanitizer blocked the query.
@@ -34,17 +32,29 @@ pub enum ErrorCode {
     InternalError,
 }
 
-impl std::fmt::Display for ErrorCode {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        // Mirrors the SCREAMING_SNAKE_CASE serde form.
-        let s = match self {
+impl ErrorCode {
+    /// The stable `SCREAMING_SNAKE_CASE` wire string (spec §5.1). The single
+    /// source of truth for both `Serialize` and `Display`, so they cannot drift.
+    const fn as_str(self) -> &'static str {
+        match self {
             Self::QueryRejected => "QUERY_REJECTED",
             Self::QueryTimeout => "QUERY_TIMEOUT",
             Self::QuerySyntaxError => "QUERY_SYNTAX_ERROR",
             Self::RateLimited => "RATE_LIMITED",
             Self::InternalError => "INTERNAL_ERROR",
-        };
-        f.write_str(s)
+        }
+    }
+}
+
+impl serde::Serialize for ErrorCode {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(self.as_str())
+    }
+}
+
+impl std::fmt::Display for ErrorCode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
     }
 }
 
@@ -53,6 +63,7 @@ enum Kind {
     Rejected(SanitizeError),
     RejectedParams(&'static str),
     BadRequest(String),
+    BadConfig { key: &'static str },
     Timeout { ms: u64 },
     Syntax,
     Internal,
@@ -100,6 +111,14 @@ impl Error {
         Self::new(Kind::Internal, Some(source.into()))
     }
 
+    /// Builds an error for an environment variable whose value could not be
+    /// parsed. Unlike a generic internal error, the message names `key` and the
+    /// hint is actionable for an operator (retrying will not help).
+    #[must_use]
+    pub(crate) fn bad_config(key: &'static str, source: impl Into<BoxError>) -> Self {
+        Self::new(Kind::BadConfig { key }, Some(source.into()))
+    }
+
     /// Returns the wire error code for this error.
     #[must_use]
     pub fn code(&self) -> ErrorCode {
@@ -107,23 +126,20 @@ impl Error {
             Kind::Rejected(_) | Kind::RejectedParams(_) | Kind::BadRequest(_) => ErrorCode::QueryRejected,
             Kind::Timeout { .. } => ErrorCode::QueryTimeout,
             Kind::Syntax => ErrorCode::QuerySyntaxError,
-            Kind::Internal => ErrorCode::InternalError,
+            Kind::BadConfig { .. } | Kind::Internal => ErrorCode::InternalError,
         }
     }
 
     /// Returns `true` if the query, its parameters, or the request were rejected.
     #[must_use]
     pub fn is_rejected(&self) -> bool {
-        matches!(
-            self.kind,
-            Kind::Rejected(_) | Kind::RejectedParams(_) | Kind::BadRequest(_)
-        )
+        self.code() == ErrorCode::QueryRejected
     }
 
     /// Returns `true` if the query timed out.
     #[must_use]
     pub fn is_timeout(&self) -> bool {
-        matches!(self.kind, Kind::Timeout { .. })
+        self.code() == ErrorCode::QueryTimeout
     }
 
     /// Returns a stable, caller-facing hint for how to fix the request.
@@ -137,6 +153,9 @@ impl Error {
                 "Query exceeded the time budget. Add a LIMIT, narrow the MATCH pattern, or reduce path depth."
             }
             Kind::Syntax => "The query is not valid Cypher. Check syntax against the schema from get_schema.",
+            Kind::BadConfig { .. } => {
+                "An environment variable has an invalid value (see the message and .env.example); correct it and restart."
+            }
             Kind::Internal => "An internal error occurred. Retry; if it persists, report it.",
         }
     }
@@ -160,9 +179,8 @@ impl Error {
         if let neo4rs::Error::Neo4j(ref n) = e {
             // The one unavoidable string match: Neo4jErrorKind models no syntax
             // category, so syntax is detected from the status code prefix.
-            if n.code().starts_with("Neo.ClientError.Statement.Syntax")
-                || n.code().starts_with("Neo.ClientError.Statement.Semantic")
-            {
+            let status = n.code();
+            if status.starts_with(SYNTAX_PREFIX) || status.starts_with(SEMANTIC_PREFIX) {
                 return Self::new(Kind::Syntax, Some(Box::new(e)));
             }
         }
@@ -170,12 +188,17 @@ impl Error {
     }
 }
 
+/// Neo4j status-code prefixes that denote a Cypher syntax/semantic error.
+const SYNTAX_PREFIX: &str = "Neo.ClientError.Statement.Syntax";
+const SEMANTIC_PREFIX: &str = "Neo.ClientError.Statement.Semantic";
+
 impl std::fmt::Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match &self.kind {
             Kind::Rejected(e) => write!(f, "{e}"),
             Kind::RejectedParams(reason) => write!(f, "parameters rejected: {reason}"),
             Kind::BadRequest(message) => write!(f, "{message}"),
+            Kind::BadConfig { key } => write!(f, "invalid value for environment variable {key}"),
             Kind::Timeout { ms } => write!(f, "query exceeded {ms}ms timeout"),
             Kind::Syntax => f.write_str("cypher syntax error"),
             Kind::Internal => f.write_str("internal error"),
@@ -185,7 +208,13 @@ impl std::fmt::Display for Error {
 
 impl std::error::Error for Error {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        self.source.as_deref().map(|s| s as &(dyn std::error::Error + 'static))
+        // A rejection's cause is the embedded `SanitizeError`; every other kind
+        // carries its cause (if any) in the boxed `source`. Both are exposed so
+        // chain-walkers (`anyhow`, `{:#}`) reach the underlying reason uniformly.
+        match &self.kind {
+            Kind::Rejected(e) => Some(e),
+            _ => self.source.as_deref().map(|s| s as &(dyn std::error::Error + 'static)),
+        }
     }
 }
 

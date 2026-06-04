@@ -4,9 +4,11 @@ members = ["crates/cypher-guard", "crates/nexus-scout"]
 
 [workspace.package]
 edition = "2021"
+# The real floor of the locked dependency tree (idna/icu need 1.86, darling 1.88);
+# enforced by the `msrv` CI job. Bump in lockstep with a dependency that raises it.
+rust-version = "1.88"
 license = "MIT"
 repository = "https://github.com/pubky/nexus-scout"
-rust-version = "1.85"
 
 # Public-API dependencies: a major bump here is a breaking release of both
 # crates (they appear in public signatures). neo4rs is pinned to match the

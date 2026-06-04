@@ -32,6 +32,40 @@ use cypher_guard::SanitizedQuery;
 
 use shape::RowShaper;
 
+/// Reserved JSON key wrapping a single-column row's bare value (see `row_to_json`).
+const KEY_VALUE: &str = "value";
+/// Reserved JSON key for a row whose Bolt→JSON conversion failed (see `row_to_json`).
+const KEY_ROW_ERROR: &str = "_row_error";
+
+/// Logs a warning if `uri` connects to a non-local host without transport
+/// security: plaintext `bolt://`/`neo4j://`, or a `+ssc` scheme that encrypts but
+/// skips certificate validation (MITM-able). neo4rs derives encryption from the
+/// scheme, and the gateway passes the URI through unchanged, so this is the only
+/// place the insecure-for-remote case is surfaced.
+fn warn_if_insecure_uri(uri: &str) {
+    let (scheme, rest) = uri.split_once("://").unwrap_or(("", uri));
+    let scheme = scheme.to_ascii_lowercase();
+    // Extract the host exactly: drop any path/query, optional `user@`, and the
+    // `:port`, handling a bracketed IPv6 literal (`[::1]:7687`).
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or(rest);
+    let host_port = authority.rsplit_once('@').map_or(authority, |(_, h)| h);
+    let host = host_port.strip_prefix('[').map_or_else(
+        || host_port.rsplit_once(':').map_or(host_port, |(h, _)| h),
+        |v6| v6.split_once(']').map_or(host_port, |(h, _)| h),
+    );
+    let loopback = matches!(host, "localhost" | "127.0.0.1" | "::1") || host.starts_with("127.");
+    let plaintext = scheme == "bolt" || scheme == "neo4j";
+    let unvalidated_tls = scheme.ends_with("+ssc");
+    if !loopback && (plaintext || unvalidated_tls) {
+        tracing::warn!(
+            scheme = %scheme,
+            host = %host,
+            "Neo4j URI is unencrypted or skips certificate validation for a non-local host; \
+             use a 'bolt+s://' or 'neo4j+s://' URI for remote connections"
+        );
+    }
+}
+
 /// A cheaply-cloneable handle to a read-only Neo4j connection pool.
 #[derive(Clone)]
 pub(crate) struct Executor {
@@ -58,16 +92,21 @@ impl Executor {
     /// Returns [`Error`] if the driver configuration is invalid or the
     /// connection cannot be established.
     pub(crate) async fn connect(config: &Config) -> Result<Self, Error> {
+        warn_if_insecure_uri(&config.neo4j_uri);
         let driver_cfg = ConfigBuilder::default()
             .uri(&config.neo4j_uri)
             .user(&config.neo4j_user)
             .password(config.neo4j_password.expose_secret())
             .db("neo4j")
-            // Read no more than one batch beyond the row budget in a single PULL.
-            .fetch_size(row_budget(&config.limits, None) + 1)
+            // One batch covers the largest result we will ever return (the row
+            // cap is the true upper bound on returned rows), so even a maximal
+            // request needs a single PULL; +1 lets a row-cap be detected.
+            .fetch_size(config.limits.max_result_rows as usize + 1)
             .build()
-            .map_err(Error::from_neo4rs)?;
-        let graph = Graph::connect(driver_cfg).await.map_err(Error::from_neo4rs)?;
+            // Connect-time failures are operational, not query syntax errors, so
+            // they map straight to Internal (from_neo4rs is execution-only).
+            .map_err(Error::internal)?;
+        let graph = Graph::connect(driver_cfg).await.map_err(Error::internal)?;
         Ok(Self {
             inner: Arc::new(Inner {
                 graph,
@@ -103,23 +142,23 @@ impl Executor {
         let mut txn = self.inner.graph.start_txn().await.map_err(Error::from_neo4rs)?;
         let mut stream = txn.execute(neo_query).await.map_err(Error::from_neo4rs)?;
         let byte_cap = self.inner.limits.max_result_bytes;
-        let budget_ms = self.inner.query_timeout;
+        let timeout_budget = self.inner.query_timeout;
 
         let started = std::time::Instant::now();
         let read = read_rows(&mut stream, &mut txn, budget, byte_cap);
-        let result = match timeout(budget_ms, read).await {
+        let result = match timeout(timeout_budget, read).await {
             Ok(Ok(response)) => {
-                // Best-effort commit; a read transaction commits nothing.
+                // A read transaction has nothing to commit; this just releases it.
                 let _ = txn.commit().await;
                 Ok(response)
             }
             Ok(Err(e)) => {
-                rollback_quietly(txn, budget_ms).await;
+                rollback_quietly(txn, timeout_budget).await;
                 Err(e)
             }
             Err(_elapsed) => {
-                rollback_quietly(txn, budget_ms).await;
-                Err(Error::timeout(duration_ms(budget_ms)))
+                rollback_quietly(txn, timeout_budget).await;
+                Err(Error::timeout(duration_ms(timeout_budget)))
             }
         };
         tracing::debug!(
@@ -145,8 +184,8 @@ async fn read_rows(
             break;
         }
     }
-    let (rows, truncation) = shaper.finish();
-    Ok(QueryResponse::new(rows, truncation.occurred()))
+    let (rows, truncated) = shaper.finish();
+    Ok(QueryResponse::new(rows, truncated))
 }
 
 /// Converts a Neo4j row into a JSON object keyed by column name. The driver
@@ -164,21 +203,22 @@ fn row_to_json(row: &neo4rs::Row) -> Map<String, Value> {
             pairs.into_iter().collect()
         }
         // A single-column row deserializes to the bare value; wrap it.
-        Ok(other) => {
-            let mut m = Map::new();
-            m.insert("value".into(), bolt_to_json(&other));
-            m
-        }
+        Ok(other) => single(KEY_VALUE, bolt_to_json(&other)),
         // Converting a row to the universal `BoltType` does not fail in practice;
         // if it ever does, surface an observable marker rather than a silent empty
         // row, so dropped data is never mistaken for an absent result.
         Err(e) => {
             tracing::warn!(error = %e, "row conversion failed; returning an error marker row");
-            let mut m = Map::new();
-            m.insert("_row_error".into(), Value::String("row conversion failed".to_owned()));
-            m
+            single(KEY_ROW_ERROR, Value::String("row conversion failed".to_owned()))
         }
     }
+}
+
+/// A one-key JSON object.
+fn single(key: &str, value: Value) -> Map<String, Value> {
+    let mut m = Map::new();
+    m.insert(key.to_owned(), value);
+    m
 }
 
 async fn rollback_quietly(txn: neo4rs::Txn, budget: Duration) {

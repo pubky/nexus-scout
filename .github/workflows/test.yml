@@ -26,6 +26,11 @@ jobs:
         image: neo4j:5.26-community
         env:
           NEO4J_AUTH: neo4j/testtest12
+          # The security model's authoritative server-side backstop for runaway
+          # queries (mirrors docker/docker-compose.yml). Exercise it in CI, not
+          # just locally, so integration runs against the documented bounds.
+          NEO4J_db_transaction_timeout: 10s
+          NEO4J_dbms_memory_transaction_total_max: 512m
         ports:
           - 7687:7687
           - 7474:7474

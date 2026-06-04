@@ -144,6 +144,8 @@ const ACCEPT: &[&str] = &[
     "MATCH (n:User) RETURN n{.name, .bio} LIMIT 5",                          // map projection
     "MATCH (n:User) RETURN n{.*} LIMIT 5",                                   // map projection wildcard
     "MATCH (n:User) RETURN n.a.b LIMIT 5",                                   // nested property access
+    "MATCH (n:User) RETURN n.`a``b` LIMIT 5",                                // escaped (doubled) backtick in identifier
+    "MATCH (n:User) RETURN n.`DELETE``CREATE` LIMIT 5", // keywords inside a backtick escape are opaque data
 ];
 
 #[test]
@@ -166,10 +168,11 @@ fn rejects_with_expected_reason() {
 fn accepts_valid_read_queries() {
     let s = sanitizer();
     for cypher in ACCEPT {
+        let result = s.sanitize(cypher);
         assert!(
-            s.sanitize(cypher).is_ok(),
+            result.is_ok(),
             "expected acceptance but rejected: {cypher:?} ({:?})",
-            s.sanitize(cypher).err()
+            result.err()
         );
     }
 }
@@ -195,4 +198,13 @@ fn every_denied_keyword_is_enforced() {
             ),
         }
     }
+}
+
+#[test]
+fn oversized_query_is_rejected_before_normalization() {
+    // Far beyond max_query_length*4 bytes: the cheap pre-normalization byte guard
+    // rejects it as TooLong without allocating an NFC copy of the whole input.
+    let huge = "A".repeat(20_000);
+    let q = format!("MATCH (n) WHERE n.x = '{huge}' RETURN n");
+    assert_eq!(sanitizer().sanitize(&q).unwrap_err().reason(), RejectReason::TooLong);
 }

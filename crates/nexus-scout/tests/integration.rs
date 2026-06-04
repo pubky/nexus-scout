@@ -78,10 +78,15 @@ async fn string_column(g: &Graph, cypher: &str, key: &str) -> Vec<String> {
     out
 }
 
-async fn user_count(g: &Graph) -> i64 {
-    let mut rows = g.execute(query("MATCH (u:User) RETURN count(u) AS c")).await.unwrap();
+/// Fetches a single scalar column from the first row of `cypher`.
+async fn scalar<T: serde::de::DeserializeOwned>(g: &Graph, cypher: &str, key: &str) -> T {
+    let mut rows = g.execute(query(cypher)).await.unwrap();
     let row = rows.next().await.unwrap().unwrap();
-    row.get::<i64>("c").unwrap()
+    row.get::<T>(key).unwrap()
+}
+
+async fn user_count(g: &Graph) -> i64 {
+    scalar(g, "MATCH (u:User) RETURN count(u) AS c", "c").await
 }
 
 #[tokio::test]
@@ -134,12 +139,7 @@ async fn params_bind_natively_and_are_inert() {
 }
 
 async fn edition(g: &Graph) -> String {
-    let mut rows = g
-        .execute(query("CALL dbms.components() YIELD edition RETURN edition"))
-        .await
-        .unwrap();
-    let row = rows.next().await.unwrap().unwrap();
-    row.get::<String>("edition").unwrap()
+    scalar(g, "CALL dbms.components() YIELD edition RETURN edition", "edition").await
 }
 
 /// The refusal matrix proves defense layer 2 (the read-only database user)

@@ -13,38 +13,57 @@
 //! `db.relationshipTypes()`) is what catches drift; keep this in sync with the
 //! `nexus-common` models under `models/{user,post,tag,file}/details.rs`.
 
-use serde::Serialize;
+use std::sync::LazyLock;
+
+use serde::{Deserialize, Serialize};
 
 /// The full graph schema: node types, relationship types, and example queries.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[non_exhaustive]
 pub struct GraphSchema {
+    /// The node types (labels and their properties).
     pub nodes: Vec<NodeSchema>,
+    /// The relationship types (direction and properties).
     pub relationships: Vec<RelationshipSchema>,
+    /// Example read-only queries an agent can adapt.
     pub examples: Vec<String>,
 }
 
 /// A node label and its properties. Each property maps to a descriptor object
 /// (`{type, description?, unique?}`).
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[non_exhaustive]
 pub struct NodeSchema {
+    /// The node label.
     pub label: String,
+    /// The node's properties, each a `{type, description?, unique?}` descriptor.
     pub properties: serde_json::Map<String, serde_json::Value>,
 }
 
 /// A relationship type, its direction (`from`/`to` labels), and its properties.
 /// Unlike node properties, each maps to a bare type string (the spec's
 /// deliberate asymmetry). Serializes `rel_type` as `type`.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[non_exhaustive]
 pub struct RelationshipSchema {
+    /// The relationship type (serialized as `type`).
     #[serde(rename = "type")]
     pub rel_type: String,
+    /// The source node label.
     pub from: String,
+    /// The target node label.
     pub to: String,
+    /// The relationship's properties, each a bare type string.
     pub properties: serde_json::Map<String, serde_json::Value>,
 }
+
+/// The curated schema, parsed once from the embedded golden file. The file is
+/// the single source of truth for the wire shape, so the Rust types and the
+/// published contract cannot drift.
+static SCHEMA: LazyLock<GraphSchema> = LazyLock::new(|| {
+    let raw = include_str!("../../../docs/schema.golden.json");
+    serde_json::from_str(raw).expect("schema.golden.json is valid and matches the schema types")
+});
 
 /// Returns the curated graph schema.
 ///
@@ -54,59 +73,6 @@ pub struct RelationshipSchema {
 /// compiled into the binary and covered by a contract test, so this cannot
 /// happen at runtime in a built artifact.
 #[must_use]
-pub fn schema() -> GraphSchema {
-    let raw = include_str!("../../../docs/schema.golden.json");
-    // The golden file is the single source of truth for the wire shape; parsing
-    // it here keeps the Rust types and the published contract from drifting.
-    serde_json::from_str::<GoldenSchema>(raw)
-        .expect("schema.golden.json is valid and matches the schema types")
-        .into()
-}
-
-#[derive(serde::Deserialize)]
-struct GoldenSchema {
-    nodes: Vec<GoldenNode>,
-    relationships: Vec<GoldenRel>,
-    examples: Vec<String>,
-}
-
-#[derive(serde::Deserialize)]
-struct GoldenNode {
-    label: String,
-    properties: serde_json::Map<String, serde_json::Value>,
-}
-
-#[derive(serde::Deserialize)]
-struct GoldenRel {
-    #[serde(rename = "type")]
-    rel_type: String,
-    from: String,
-    to: String,
-    properties: serde_json::Map<String, serde_json::Value>,
-}
-
-impl From<GoldenSchema> for GraphSchema {
-    fn from(g: GoldenSchema) -> Self {
-        Self {
-            nodes: g
-                .nodes
-                .into_iter()
-                .map(|n| NodeSchema {
-                    label: n.label,
-                    properties: n.properties,
-                })
-                .collect(),
-            relationships: g
-                .relationships
-                .into_iter()
-                .map(|r| RelationshipSchema {
-                    rel_type: r.rel_type,
-                    from: r.from,
-                    to: r.to,
-                    properties: r.properties,
-                })
-                .collect(),
-            examples: g.examples,
-        }
-    }
+pub fn schema() -> &'static GraphSchema {
+    &SCHEMA
 }

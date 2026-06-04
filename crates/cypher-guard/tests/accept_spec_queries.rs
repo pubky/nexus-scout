@@ -51,24 +51,20 @@ const FLOW_QUERIES: &[&str] = &[
       RETURN length(path) AS distance, [n IN nodes(path) | n.name] AS chain",
 ];
 
-#[test]
-fn schema_examples_pass() {
-    for q in SCHEMA_EXAMPLES {
-        assert!(
-            s().sanitize(q).is_ok(),
-            "schema example rejected: {q:?} ({:?})",
-            s().sanitize(q).err()
-        );
+fn assert_all_accepted(corpus: &[&str], what: &str) {
+    let s = s();
+    for q in corpus {
+        let result = s.sanitize(q);
+        assert!(result.is_ok(), "{what} rejected: {q:?} ({:?})", result.err());
     }
 }
 
 #[test]
+fn schema_examples_pass() {
+    assert_all_accepted(SCHEMA_EXAMPLES, "schema example");
+}
+
+#[test]
 fn flow_queries_pass() {
-    for q in FLOW_QUERIES {
-        assert!(
-            s().sanitize(q).is_ok(),
-            "flow query rejected: {q:?} ({:?})",
-            s().sanitize(q).err()
-        );
-    }
+    assert_all_accepted(FLOW_QUERIES, "flow query");
 }

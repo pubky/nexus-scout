@@ -34,7 +34,7 @@ convention.
 | `lib.rs` (`Scout`) | The shared facade: sanitize → bound params → execute; expose schema. |
 | `config.rs` | `Config` built through one populator (`ConfigBuilder`); `Secret` redaction. |
 | `error.rs` | Canonical `Error` struct + serialize-only `ErrorCode` wire DTO; `from_neo4rs`. |
-| `response.rs` | `QueryResponse` / `ErrorResponse` / `Response` wire types. |
+| `response.rs` | `QueryResponse` / `ErrorResponse` wire types. |
 | `params.rs` | Parameter count/byte/depth bounds. |
 | `convert.rs` | `bolt_to_json` (total over all Bolt variants) and `json_to_bolt`. |
 | `executor/mod.rs` | Read transaction, dual timeout, native binding. |

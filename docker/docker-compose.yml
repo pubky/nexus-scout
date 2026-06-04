@@ -29,6 +29,9 @@ services:
       NEO4J_USER: nexus_scout_reader
       NEO4J_PASSWORD: ${NEO4J_SCOUT_PASSWORD:-change-me-in-production}
       RUST_LOG: nexus_scout=info
+      # The guardrail vars (DEFAULT_LIMIT, MAX_RESULT_BYTES, MAX_PARAM_*, ...) from
+      # .env.example are optional and use built-in defaults here; add them above to
+      # override, or wire `env_file: [../.env]` to load them from a local .env.
     depends_on:
       neo4j:
         condition: service_healthy

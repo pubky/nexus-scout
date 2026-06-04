@@ -15,7 +15,7 @@ fn schema_prints_json_without_a_database() {
     let v: Value = serde_json::from_str(&stdout).expect("schema is valid JSON");
     assert!(v["nodes"].is_array());
     assert!(v["relationships"].is_array());
-    assert_eq!(v["examples"].as_array().unwrap().len(), 3);
+    assert!(!v["examples"].as_array().unwrap().is_empty());
 }
 
 #[test]
@@ -53,6 +53,26 @@ fn bad_param_is_a_rejection_not_an_internal_error() {
     let stdout = String::from_utf8(assert.get_output().stdout.clone()).unwrap();
     let v: Value = serde_json::from_str(&stdout).unwrap();
     assert_eq!(v["error"], "QUERY_REJECTED");
+}
+
+#[test]
+fn malformed_config_env_names_the_variable_and_is_not_retryable() {
+    // A bad numeric env var on the `query` path must fail at config resolution
+    // with a message that names the offending variable (not a generic, retryable
+    // INTERNAL_ERROR with no actionable detail). Fails before any DB connection.
+    let assert = nexus_scout()
+        .env("MAX_RESULT_ROWS", "not-a-number")
+        .args(["query", "RETURN 1"])
+        .assert()
+        .code(1);
+    let stdout = String::from_utf8(assert.get_output().stdout.clone()).unwrap();
+    let v: Value = serde_json::from_str(&stdout).expect("error envelope is valid JSON");
+    assert_eq!(v["error"], "INTERNAL_ERROR");
+    assert!(
+        v["message"].as_str().unwrap().contains("MAX_RESULT_ROWS"),
+        "message should name the offending variable: {}",
+        v["message"]
+    );
 }
 
 #[test]

@@ -16,8 +16,11 @@ use crate::error::ErrorCode;
 #[derive(Debug, Clone, Serialize)]
 #[non_exhaustive]
 pub struct QueryResponse {
+    /// The result rows; each is a JSON object keyed by the query's `RETURN` columns.
     pub results: Vec<Map<String, Value>>,
+    /// The number of rows in `results` (equal to `results.len()`).
     pub count: usize,
+    /// `true` if the row or byte cap truncated the result.
     pub truncated: bool,
 }
 
@@ -39,16 +42,10 @@ impl QueryResponse {
 #[derive(Debug, Clone, Serialize)]
 #[non_exhaustive]
 pub struct ErrorResponse {
+    /// The machine-readable error code.
     pub error: ErrorCode,
+    /// A human-readable error message.
     pub message: String,
+    /// A stable, actionable hint for fixing the request.
     pub hint: String,
-}
-
-/// The serialized envelope for either outcome of a query.
-#[derive(Debug, Clone, Serialize)]
-#[serde(untagged)]
-#[non_exhaustive]
-pub enum Response {
-    Ok(QueryResponse),
-    Err(ErrorResponse),
 }

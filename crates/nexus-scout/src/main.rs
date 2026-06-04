@@ -1,19 +1,24 @@
 //! `nexus-scout` binary entry point.
 //!
-//! Parses the CLI, resolves configuration (defaults < environment < flags), and
-//! dispatches. JSON is written to stdout for both success and error envelopes;
-//! diagnostics go to stderr via `tracing`; the exit code encodes the outcome.
+//! Parses the CLI, resolves configuration (defaults < environment, with the
+//! Neo4j URI optionally overridden by a CLI flag), and dispatches. JSON is
+//! written to stdout for both success and error envelopes; diagnostics go to
+//! stderr via `tracing`; the exit code encodes the outcome.
 
 use std::process::ExitCode as ProcExitCode;
 
 use clap::Parser;
 use nexus_scout::cli::{build_params, Cli, Command, ExitCode, QueryArgs, Transport};
-use nexus_scout::{Config, Error, Response, Scout};
+use nexus_scout::{Config, Error, Scout};
 
 #[tokio::main]
 async fn main() -> ProcExitCode {
+    // Default to the gateway's own info/warn output so the operational logs are
+    // visible out of the box; `RUST_LOG` still overrides when set.
+    let filter = tracing_subscriber::EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("nexus_scout=info,warn"));
     tracing_subscriber::fmt()
-        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+        .with_env_filter(filter)
         .with_writer(std::io::stderr)
         .init();
 
@@ -26,7 +31,7 @@ async fn run(cli: Cli) -> ExitCode {
     // Schema needs neither a database nor configuration, so dispatch it before
     // resolving config: a malformed env var must not break schema discovery.
     if matches!(cli.command, Command::Schema) {
-        print_json(&nexus_scout::schema());
+        print_json(nexus_scout::schema());
         return ExitCode::Ok;
     }
 
@@ -53,7 +58,7 @@ async fn run_query(config: Config, args: QueryArgs) -> ExitCode {
     };
     match scout.query(&args.cypher, params, args.limit).await {
         Ok(response) => {
-            print_json(&Response::Ok(response));
+            print_json(&response);
             ExitCode::Ok
         }
         Err(e) => fail(&e),
@@ -90,7 +95,7 @@ fn load_config(neo4j_uri: Option<String>) -> Result<Config, Error> {
 
 /// Prints an error envelope to stdout and returns its exit code.
 fn fail(err: &Error) -> ExitCode {
-    print_json(&Response::Err(err.to_response()));
+    print_json(&err.to_response());
     ExitCode::for_error(err)
 }
 

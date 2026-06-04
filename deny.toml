@@ -18,6 +18,10 @@ allow = ["MIT", "Apache-2.0", "Apache-2.0 WITH LLVM-exception", "BSD-2-Clause", 
 confidence-threshold = 0.9
 
 [bans]
+# Warn, not deny: the current duplicate versions (getrandom, hashbrown, rand,
+# syn, thiserror, webpki-roots, windows-sys, ...) are all dragged in by the
+# pinned neo4rs / rmcp TLS tree and leave when it updates. Revisit on each
+# neo4rs bump (same trigger as the advisory ignores above).
 multiple-versions = "warn"
 
 [sources]

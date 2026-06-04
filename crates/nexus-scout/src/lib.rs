@@ -20,6 +20,8 @@
 //! # }
 //! ```
 
+#![deny(missing_docs)]
+
 pub mod cli;
 mod config;
 mod convert;
@@ -36,7 +38,7 @@ pub use config::{Config, ConfigBuilder, Limits, Secret};
 #[doc(inline)]
 pub use error::{Error, ErrorCode};
 #[doc(inline)]
-pub use response::{ErrorResponse, QueryResponse, Response};
+pub use response::{ErrorResponse, QueryResponse};
 #[doc(inline)]
 pub use schema::{schema, GraphSchema, NodeSchema, RelationshipSchema};
 #[cfg(feature = "mcp")]
@@ -62,7 +64,6 @@ struct Inner {
     sanitizer: Sanitizer,
     executor: Executor,
     limits: Limits,
-    schema: GraphSchema,
 }
 
 impl Scout {
@@ -79,7 +80,6 @@ impl Scout {
                 sanitizer: Sanitizer::new(limits.guard),
                 executor,
                 limits,
-                schema: schema::schema(),
             }),
         })
     }
@@ -122,8 +122,8 @@ impl Scout {
 
     /// Returns the curated graph schema.
     #[must_use]
-    pub fn schema(&self) -> &GraphSchema {
-        &self.inner.schema
+    pub fn schema(&self) -> &'static GraphSchema {
+        schema::schema()
     }
 }
 

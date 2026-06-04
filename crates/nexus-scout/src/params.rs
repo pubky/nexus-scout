@@ -21,23 +21,35 @@ pub(crate) fn check_params(params: &Map<String, Value>, limits: &Limits) -> Resu
     if params.len() > limits.max_param_count {
         return Err(Error::rejected_params("too many parameters"));
     }
-    let bytes = serde_json::to_vec(params).map_or(0, |v| v.len());
-    if bytes > limits.max_param_bytes {
+    if serialized_len(params) > limits.max_param_bytes {
         return Err(Error::rejected_params("parameter payload too large"));
     }
     for value in params.values() {
-        if depth(value) > limits.max_param_depth {
+        if !within_depth(value, limits.max_param_depth) {
             return Err(Error::rejected_params("parameter nesting too deep"));
         }
     }
     Ok(())
 }
 
-fn depth(value: &Value) -> usize {
+/// The serialized JSON byte length of `value`. The single definition of this
+/// byte-size policy, shared with the executor's row-shaping byte cap. A
+/// serialization failure (which a valid `serde_json::Value`/`Map` does not
+/// produce) returns `usize::MAX` so the value fails *closed* against a resource
+/// bound — it is never under-counted as 0 bytes and waved past the cap.
+pub(crate) fn serialized_len<T: serde::Serialize>(value: &T) -> usize {
+    serde_json::to_vec(value).map_or(usize::MAX, |v| v.len())
+}
+
+/// Whether `value` nests no deeper than `limit` levels (a scalar is depth 0; a
+/// container is `1 + max child depth`). Descends at most `limit + 1` levels, so
+/// the policy bounds its own measuring recursion: an over-deep payload is
+/// rejected without ever recursing to the input's full depth.
+fn within_depth(value: &Value, limit: usize) -> bool {
     match value {
-        Value::Array(items) => 1 + items.iter().map(depth).max().unwrap_or(0),
-        Value::Object(map) => 1 + map.values().map(depth).max().unwrap_or(0),
-        _ => 0,
+        Value::Array(items) => limit >= 1 && items.iter().all(|v| within_depth(v, limit - 1)),
+        Value::Object(map) => limit >= 1 && map.values().all(|v| within_depth(v, limit - 1)),
+        _ => true,
     }
 }
 
@@ -71,6 +83,19 @@ mod tests {
     fn too_deep_params_rejected() {
         let mut v = json!(1);
         for _ in 0..20 {
+            v = json!([v]);
+        }
+        let mut m = Map::new();
+        m.insert("deep".into(), v);
+        assert!(check_params(&m, &limits()).is_err());
+    }
+
+    #[test]
+    fn very_deeply_nested_param_is_rejected_within_bounded_recursion() {
+        // Far past max_param_depth: the check must short-circuit and reject
+        // without recursing to the input's full depth (the bound caps recursion).
+        let mut v = json!(1);
+        for _ in 0..500 {
             v = json!([v]);
         }
         let mut m = Map::new();
