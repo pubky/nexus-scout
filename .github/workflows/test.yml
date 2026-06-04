@@ -26,10 +26,11 @@ jobs:
         image: neo4j:5.26-community
         env:
           NEO4J_AUTH: neo4j/testtest12
-          # The security model's authoritative server-side backstop for runaway
-          # queries (mirrors docker/docker-compose.yml). Exercise it in CI, not
-          # just locally, so integration runs against the documented bounds.
+          # The authoritative server-side backstop for runaway queries, verified
+          # by the gateway's /ready gate (mirrors docker/docker-compose.yml). All
+          # three are set so /ready passes in CI.
           NEO4J_db_transaction_timeout: 10s
+          NEO4J_db_memory_transaction_max: 64m
           NEO4J_dbms_memory_transaction_total_max: 512m
         ports:
           - 7687:7687
@@ -54,4 +55,4 @@ jobs:
           docker exec -i "$(docker ps -qf ancestor=neo4j:5.26-community)" \
             cypher-shell -u neo4j -p testtest12 \
             "CREATE USER nexus_scout_reader IF NOT EXISTS SET PASSWORD 'change-me-in-production' SET PASSWORD CHANGE NOT REQUIRED;"
-      - run: cargo nextest run -p nexus-scout --features integration
+      - run: cargo nextest run -p nexus-scout --features integration,http
