@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/cypher-guard", "crates/nexus-scout"]
+members = ["crates/cypher-guard", "crates/nexus-scout-types", "crates/nexus-scout", "crates/nexus-scout-cli"]
 
 [workspace.package]
 edition = "2021"
@@ -16,13 +16,19 @@ repository = "https://github.com/pubky/nexus-scout"
 [workspace.dependencies]
 serde = { version = "1.0.219", features = ["derive"] }
 serde_json = { version = "1.0.149", features = ["preserve_order"] }
-tokio = { version = "1.52", features = ["macros", "rt-multi-thread", "time"] }
+tokio = { version = "1.52", features = ["macros", "rt-multi-thread", "time", "signal"] }
 clap = { version = "4.6", features = ["derive"] }
 unicode-normalization = "0.1"
 base64 = "0.22"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 neo4rs = "=0.8.0"
+# HTTP server tier (optional, behind the `http` feature on nexus-scout).
+axum = { version = "0.8", default-features = false, features = ["http1", "json", "tokio"] }
+tower = { version = "0.5", features = ["limit", "load-shed"] }
+tower-http = { version = "0.6", features = ["limit", "trace", "catch-panic", "request-id", "timeout"] }
+# Blocking HTTP client for the `scout` CLI (rustls; reuses the vendored TLS stack).
+ureq = { version = "2", default-features = false, features = ["tls"] }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

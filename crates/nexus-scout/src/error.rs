@@ -13,50 +13,9 @@ use crate::response::ErrorResponse;
 
 type BoxError = Box<dyn std::error::Error + Send + Sync>;
 
-/// Machine-readable error code carried in the wire response (spec §5.1).
-///
-/// `#[non_exhaustive]`: matching on it requires a wildcard arm. `RateLimited` is
-/// reserved for a future per-agent rate limiter and is not produced in the MVP.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[non_exhaustive]
-pub enum ErrorCode {
-    /// The sanitizer blocked the query.
-    QueryRejected,
-    /// The query exceeded the time budget.
-    QueryTimeout,
-    /// Neo4j reported a Cypher syntax error.
-    QuerySyntaxError,
-    /// The caller exceeded the request rate limit. Reserved; unused in the MVP.
-    RateLimited,
-    /// An unexpected internal failure.
-    InternalError,
-}
-
-impl ErrorCode {
-    /// The stable `SCREAMING_SNAKE_CASE` wire string (spec §5.1). The single
-    /// source of truth for both `Serialize` and `Display`, so they cannot drift.
-    const fn as_str(self) -> &'static str {
-        match self {
-            Self::QueryRejected => "QUERY_REJECTED",
-            Self::QueryTimeout => "QUERY_TIMEOUT",
-            Self::QuerySyntaxError => "QUERY_SYNTAX_ERROR",
-            Self::RateLimited => "RATE_LIMITED",
-            Self::InternalError => "INTERNAL_ERROR",
-        }
-    }
-}
-
-impl serde::Serialize for ErrorCode {
-    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        serializer.serialize_str(self.as_str())
-    }
-}
-
-impl std::fmt::Display for ErrorCode {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(self.as_str())
-    }
-}
+/// The wire error code is defined in [`nexus_scout_types`] (shared with the
+/// `scout` client) and re-exported so the gateway's public API is unchanged.
+pub use nexus_scout_types::ErrorCode;
 
 #[derive(Debug)]
 enum Kind {
@@ -65,6 +24,7 @@ enum Kind {
     BadRequest(String),
     BadConfig { key: &'static str },
     Timeout { ms: u64 },
+    RateLimited,
     Syntax,
     Internal,
 }
@@ -111,6 +71,13 @@ impl Error {
         Self::new(Kind::Internal, Some(source.into()))
     }
 
+    /// Builds a rate-limit rejection (HTTP 429). Produced when the public HTTP
+    /// gateway sheds load past its admission limits.
+    #[must_use]
+    pub fn rate_limited() -> Self {
+        Self::new(Kind::RateLimited, None)
+    }
+
     /// Builds an error for an environment variable whose value could not be
     /// parsed. Unlike a generic internal error, the message names `key` and the
     /// hint is actionable for an operator (retrying will not help).
@@ -125,6 +92,7 @@ impl Error {
         match self.kind {
             Kind::Rejected(_) | Kind::RejectedParams(_) | Kind::BadRequest(_) => ErrorCode::QueryRejected,
             Kind::Timeout { .. } => ErrorCode::QueryTimeout,
+            Kind::RateLimited => ErrorCode::RateLimited,
             Kind::Syntax => ErrorCode::QuerySyntaxError,
             Kind::BadConfig { .. } | Kind::Internal => ErrorCode::InternalError,
         }
@@ -152,6 +120,7 @@ impl Error {
             Kind::Timeout { .. } => {
                 "Query exceeded the time budget. Add a LIMIT, narrow the MATCH pattern, or reduce path depth."
             }
+            Kind::RateLimited => "Too many requests; slow down and retry after a short delay.",
             Kind::Syntax => "The query is not valid Cypher. Check syntax against the schema from get_schema.",
             Kind::BadConfig { .. } => {
                 "An environment variable has an invalid value (see the message and .env.example); correct it and restart."
@@ -163,11 +132,7 @@ impl Error {
     /// Renders this error as its wire response.
     #[must_use]
     pub fn to_response(&self) -> ErrorResponse {
-        ErrorResponse {
-            error: self.code(),
-            message: self.to_string(),
-            hint: self.hint().to_owned(),
-        }
+        ErrorResponse::new(self.code(), self.to_string(), self.hint())
     }
 
     /// Classifies a `neo4rs` driver error into a gateway error.
@@ -200,6 +165,7 @@ impl std::fmt::Display for Error {
             Kind::BadRequest(message) => write!(f, "{message}"),
             Kind::BadConfig { key } => write!(f, "invalid value for environment variable {key}"),
             Kind::Timeout { ms } => write!(f, "query exceeded {ms}ms timeout"),
+            Kind::RateLimited => f.write_str("rate limit exceeded"),
             Kind::Syntax => f.write_str("cypher syntax error"),
             Kind::Internal => f.write_str("internal error"),
         }

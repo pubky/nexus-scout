@@ -1,0 +1,21 @@
+[package]
+name = "nexus-scout-cli"
+version = "0.1.0"
+description = "Thin HTTP client for the nexus-scout gateway."
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "scout"
+path = "src/main.rs"
+
+[dependencies]
+nexus-scout-types = { path = "../nexus-scout-types" }
+clap = { workspace = true }
+serde_json = { workspace = true }
+ureq = { workspace = true }
+
+[lints]
+workspace = true

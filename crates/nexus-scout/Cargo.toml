@@ -16,6 +16,7 @@ path = "src/main.rs"
 
 [dependencies]
 cypher-guard = { path = "../cypher-guard" }
+nexus-scout-types = { path = "../nexus-scout-types" }
 neo4rs = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
