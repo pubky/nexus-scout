@@ -89,7 +89,9 @@ async fn check_server_bounds(scout: &Scout, profile: Profile) -> Result<(), Erro
 
 /// Builds the application router. Separated from [`serve_http`] so tests can
 /// drive it with `tower::ServiceExt::oneshot` against an already-built [`Scout`].
-pub(crate) fn router(scout: Scout, limits: HttpLimits) -> Router {
+/// Exposed (doc-hidden) for the integration suite; not a stable public API.
+#[doc(hidden)]
+pub fn router(scout: Scout, limits: HttpLimits) -> Router {
     let state = AppState {
         scout,
         limits,

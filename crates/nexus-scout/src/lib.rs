@@ -35,7 +35,7 @@ mod schema;
 mod server;
 
 #[doc(inline)]
-pub use config::{Config, ConfigBuilder, Limits, Secret};
+pub use config::{Config, ConfigBuilder, HttpLimits, Limits, Profile, Secret};
 #[doc(inline)]
 pub use error::{Error, ErrorCode};
 #[doc(inline)]
@@ -45,6 +45,9 @@ pub use schema::{schema, GraphSchema, NodeSchema, RelationshipSchema};
 #[cfg(feature = "http")]
 #[doc(inline)]
 pub use http::serve_http;
+#[cfg(feature = "http")]
+#[doc(hidden)]
+pub use http::router as http_router;
 #[cfg(feature = "mcp")]
 #[doc(inline)]
 pub use server::serve_stdio;
