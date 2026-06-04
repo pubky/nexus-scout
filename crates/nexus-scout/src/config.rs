@@ -382,7 +382,10 @@ mod tests {
         assert_eq!(value_of("HTTP_MAX_BODY_BYTES"), h.max_body_bytes.to_string());
         assert_eq!(value_of("HTTP_MAX_CONCURRENCY"), h.max_concurrency.to_string());
         assert_eq!(value_of("HTTP_MAX_RPS"), h.max_rps.to_string());
-        assert_eq!(value_of("HTTP_REQUEST_TIMEOUT_MS"), h.request_timeout.as_millis().to_string());
+        assert_eq!(
+            value_of("HTTP_REQUEST_TIMEOUT_MS"),
+            h.request_timeout.as_millis().to_string()
+        );
         assert_eq!(value_of("NEXUS_SCOUT_PROFILE"), Profile::default().to_string());
     }
 }

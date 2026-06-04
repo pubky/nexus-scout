@@ -1,10 +1,10 @@
 //! Read-only Cypher query gateway between AI agents and the Pubky social graph.
 //!
 //! `nexus-scout` accepts a Cypher query, validates it is read-only via
-//! [`cypher_guard`], executes it against Neo4j under a read-only database user,
-//! and returns structured JSON. It is exposed as a CLI and (optionally) a Model
-//! Context Protocol server; both front-ends share the same [`Scout`] core so
-//! they cannot diverge in validation behavior.
+//! [`cypher_guard`], executes it against Neo4j, and returns structured JSON. The
+//! gateway is served over a public HTTP API and (optionally) a Model Context
+//! Protocol server; every transport shares the same [`Scout`] core so they
+//! cannot diverge in validation behavior.
 //!
 //! # Examples
 //!
@@ -38,16 +38,16 @@ mod server;
 pub use config::{Config, ConfigBuilder, HttpLimits, Limits, Profile, Secret};
 #[doc(inline)]
 pub use error::{Error, ErrorCode};
+#[cfg(feature = "http")]
+#[doc(hidden)]
+pub use http::router as http_router;
+#[cfg(feature = "http")]
+#[doc(inline)]
+pub use http::serve_http;
 #[doc(inline)]
 pub use response::{ErrorResponse, QueryResponse};
 #[doc(inline)]
 pub use schema::{schema, GraphSchema, NodeSchema, RelationshipSchema};
-#[cfg(feature = "http")]
-#[doc(inline)]
-pub use http::serve_http;
-#[cfg(feature = "http")]
-#[doc(hidden)]
-pub use http::router as http_router;
 #[cfg(feature = "mcp")]
 #[doc(inline)]
 pub use server::serve_stdio;

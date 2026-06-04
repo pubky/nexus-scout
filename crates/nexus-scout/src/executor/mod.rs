@@ -84,7 +84,11 @@ struct InsecureUri(&'static str);
 
 impl std::fmt::Display for InsecureUri {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "NEO4J_URI {} for a non-local host; use bolt+s:// for remote connections", self.0)
+        write!(
+            f,
+            "NEO4J_URI {} for a non-local host; use bolt+s:// for remote connections",
+            self.0
+        )
     }
 }
 
@@ -138,10 +142,16 @@ impl Executor {
     pub(crate) async fn connect(config: &Config) -> Result<Self, Error> {
         if let Some(reason) = insecure_remote_reason(&config.neo4j_uri) {
             if config.profile == Profile::Production {
-                tracing::error!(reason, "refusing to start: insecure NEO4J_URI for a non-local host in production");
+                tracing::error!(
+                    reason,
+                    "refusing to start: insecure NEO4J_URI for a non-local host in production"
+                );
                 return Err(Error::bad_config("NEO4J_URI", InsecureUri(reason)));
             }
-            tracing::warn!(reason, "insecure Neo4j URI for a non-local host; use bolt+s:// for remote connections");
+            tracing::warn!(
+                reason,
+                "insecure Neo4j URI for a non-local host; use bolt+s:// for remote connections"
+            );
         }
         let driver_cfg = ConfigBuilder::default()
             .uri(&config.neo4j_uri)
@@ -249,7 +259,11 @@ impl Executor {
                 }
             }
         }
-        Ok(REQUIRED_BOUNDS.iter().copied().filter(|b| !bounded.contains(b)).collect())
+        Ok(REQUIRED_BOUNDS
+            .iter()
+            .copied()
+            .filter(|b| !bounded.contains(b))
+            .collect())
     }
 }
 
@@ -330,7 +344,12 @@ mod tests {
 
     #[test]
     fn loopback_uris_are_never_insecure() {
-        for uri in ["bolt://localhost:7687", "bolt://127.0.0.1:7687", "neo4j://[::1]:7687", "bolt://127.5.5.5:7687"] {
+        for uri in [
+            "bolt://localhost:7687",
+            "bolt://127.0.0.1:7687",
+            "neo4j://[::1]:7687",
+            "bolt://127.5.5.5:7687",
+        ] {
             assert_eq!(insecure_remote_reason(uri), None, "{uri}");
         }
     }

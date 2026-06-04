@@ -122,7 +122,10 @@ fn handle(result: Result<ureq::Response, ureq::Error>) -> (String, u8) {
         Ok(response) => normalize(response.status(), &read_body(response)),
         Err(ureq::Error::Status(status, response)) => normalize(status, &read_body(response)),
         Err(ureq::Error::Transport(transport)) => (
-            envelope(ErrorCode::InternalError, &format!("could not reach the gateway: {transport}")),
+            envelope(
+                ErrorCode::InternalError,
+                &format!("could not reach the gateway: {transport}"),
+            ),
             1,
         ),
     }
@@ -138,7 +141,10 @@ fn read_body(response: ureq::Response) -> String {
 fn normalize(status: u16, body: &str) -> (String, u8) {
     let Ok(value) = serde_json::from_str::<Value>(body) else {
         return (
-            envelope(ErrorCode::InternalError, &format!("gateway returned a non-JSON {status} response")),
+            envelope(
+                ErrorCode::InternalError,
+                &format!("gateway returned a non-JSON {status} response"),
+            ),
             1,
         );
     };

@@ -5,8 +5,9 @@
 A read-only Cypher query gateway between AI agents and the Pubky social graph (Neo4j).
 
 An agent sends a Cypher query; nexus-scout validates it is read-only, executes it against Neo4j
-under tight guardrails, and returns structured JSON. It is exposed both as a CLI (for shell agents
-like Claude Code) and as a Model Context Protocol server (for MCP-native agents like Jeb).
+under tight guardrails, and returns structured JSON. It runs as a hosted, public **HTTP service** -
+agents POST Cypher to its API and get JSON back, never touching the Neo4j connection string - with a
+thin `scout` CLI client and a Model Context Protocol server (stdio) over the same core.
 
 ## What it is / is not
 
@@ -20,27 +21,55 @@ like Claude Code) and as a Model Context Protocol server (for MCP-native agents 
 | Crate | Role |
 |-------|------|
 | [`cypher-guard`](crates/cypher-guard) | Pure, reusable, read-only-Cypher sanitizer (no I/O, no driver). The security core. |
-| [`nexus-scout`](crates/nexus-scout) | The gateway: executor, schema, config, CLI, and MCP server. |
+| [`nexus-scout-types`](crates/nexus-scout-types) | The shared wire contract: request/response DTOs + the code→status / code→exit maps. |
+| [`nexus-scout`](crates/nexus-scout) | The gateway server: sanitizer + executor + schema + the HTTP and MCP transports. |
+| [`nexus-scout-cli`](crates/nexus-scout-cli) | The `scout` HTTP client (holds no Neo4j credentials). |
 
-## CLI
+## Running the gateway
 
 ```sh
-# Learn the graph structure first (no database needed).
-nexus-scout schema | jq .nodes
+# Serve the public HTTP API (default). Binds 127.0.0.1:8080; put a TLS-terminating
+# reverse proxy in front for public traffic (see docker/docker-compose.prod.yml).
+nexus-scout serve --transport http
 
-# Run a read-only query.
-nexus-scout query "MATCH (u:User)<-[f:FOLLOWS]-() RETURN u.name, count(f) AS followers ORDER BY followers DESC"
-
-# Typed parameters (numbers/arrays/objects) via --params-json; string params via --param.
-nexus-scout query --params-json '{"since": 1709251200000}' \
-  "MATCH (u:User)-[t:TAGGED]->(p) WHERE t.indexed_at > \$since RETURN t.label, count(p) AS c"
-
-# Run as an MCP server over stdio.
+# Or serve MCP over stdio for MCP-native agents.
 nexus-scout serve --transport stdio
 ```
 
-Output is JSON on **stdout** (both success and error envelopes, so `| jq` always works); logs go to
-**stderr**. Exit codes: `0` ok, `1` internal, `2` rejected, `3` timeout.
+## HTTP API
+
+| Method + path | Purpose |
+|---------------|---------|
+| `POST /v1/query` | Run a read-only query: body `{ "cypher": ..., "params"?: {…}, "limit"?: n }`. |
+| `GET /v1/schema` | The curated graph schema. |
+| `GET /health` | Liveness (process up). |
+| `GET /ready` | Readiness: Neo4j reachable **and** the server-side cost bounds are set, else `503`. |
+| `GET /metrics` | In-flight gauge + request/shed counters (plain text). |
+
+```sh
+curl -s localhost:8080/v1/schema | jq .nodes
+curl -s -XPOST localhost:8080/v1/query -H 'content-type: application/json' \
+  -d '{"cypher":"MATCH (u:User) RETURN u.name AS name LIMIT 5"}' | jq
+```
+
+Success and error share one envelope shape: `{ results, count, truncated }` or
+`{ error, message, hint }`. Codes map to status: `QUERY_REJECTED`/`QUERY_SYNTAX_ERROR` → 400,
+`QUERY_TIMEOUT` → 504, `RATE_LIMITED` → 429, `INTERNAL_ERROR` → 500; an oversized body → 413.
+
+## `scout` CLI client
+
+```sh
+scout schema | jq .nodes
+scout query "MATCH (u:User)<-[f:FOLLOWS]-() RETURN u.name, count(f) AS followers ORDER BY followers DESC"
+
+# Typed parameters via --params-json; string params via --param.
+scout query --params-json '{"since": 1709251200000}' \
+  "MATCH (u:User)-[t:TAGGED]->(p) WHERE t.indexed_at > \$since RETURN t.label, count(p) AS c"
+```
+
+`scout` is a thin client of the HTTP API (target it via `--server-url` or `NEXUS_SCOUT_URL`, default
+`http://localhost:8080`); it holds no Neo4j credentials. JSON is always on **stdout** (so `| jq`
+works); exit codes: `0` ok, `1` internal/transient, `2` rejected, `3` timeout.
 
 ## Guardrails
 
@@ -53,6 +82,10 @@ Output is JSON on **stdout** (both success and error envelopes, so `| jq` always
 | Variable-length paths | `*1..5` | Unbounded/over-deep paths are rewritten, not rejected. |
 | Query timeout | 10 s | Client liveness bound. |
 | Param count/bytes/depth | 32 / 8 KiB / 8 | Denial-of-service bounds on parameters. |
+| Request body size (HTTP) | 64 KiB | Oversized request bodies rejected with `413`. |
+| In-flight concurrency (HTTP) | 64 | Excess `/v1/query` requests shed with `429` (not queued). |
+| Request rate (HTTP) | 50 rps | Sustained `/v1/query` over the cap shed with `429`. |
+| Whole-request timeout (HTTP) | 30 s | Coarse backstop above the 10 s query timeout. |
 
 All are configurable via environment variables (see [`.env.example`](.env.example)).
 
@@ -93,9 +126,19 @@ re-audit checklist for Neo4j version bumps are enumerated in
 
 Parameters are bound natively (never interpolated), so parameter values are inert against injection.
 
+**Public HTTP endpoint (v1).** The HTTP API is public and **unauthenticated**. It is read-only
+(the sanitizer enforces this at the HTTP boundary exactly as on the CLI/MCP paths) and bounded both
+per request and in aggregate: a body cap, an in-flight concurrency cap, a QPS shed, and a Caddy
+per-IP limit. Neo4j credentials live only in the service; clients never receive them. The real bound
+on a single expensive read is the **server-side Neo4j transaction timeout/memory**, which the gateway
+verifies at readiness and refuses to start without under `NEXUS_SCOUT_PROFILE=production`. See
+[ADR-0009](docs/adr/0009-http-service-transport.md) and [`docs/deployment.md`](docs/deployment.md).
+
 **Honest scope**: "zero modification of the primary" holds by isolation; "zero modification of the
 replica" rests on sanitizer correctness. "Zero data **exfiltration**" is *not* achievable for a
-public-read graph; it is bounded (rows, bytes, timeout), not prevented.
+public-read graph; v1 bounds writes and per-request cost and rate-limits aggregate load, but does not
+*prevent* bulk reads, and a sufficiently distributed flood can still degrade availability.
+Authentication is a documented follow-up.
 
 ## Development
 
@@ -106,10 +149,11 @@ cargo fmt --check
 
 # Integration tests need a live Neo4j (see docker/docker-compose.yml):
 docker compose -f docker/docker-compose.yml up -d neo4j
-cargo nextest run -p nexus-scout --features integration
+cargo nextest run -p nexus-scout --features integration,http
 ```
 
-See [`docs/architecture.md`](docs/architecture.md) for the design and the ADR index.
+See [`docs/architecture.md`](docs/architecture.md) for the design and the ADR index, and
+[`docs/deployment.md`](docs/deployment.md) for running the hosted service.
 
 ## License
 

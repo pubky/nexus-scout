@@ -55,12 +55,18 @@ async fn seed(admin: &Graph) {
 }
 
 async fn user_count(admin: &Graph) -> i64 {
-    let mut rows = admin.execute(query("MATCH (u:User) RETURN count(u) AS c")).await.unwrap();
+    let mut rows = admin
+        .execute(query("MATCH (u:User) RETURN count(u) AS c"))
+        .await
+        .unwrap();
     rows.next().await.unwrap().unwrap().get::<i64>("c").unwrap()
 }
 
 async fn label_ids(admin: &Graph, label: &str) -> Vec<String> {
-    let mut rows = admin.execute(query(&format!("MATCH (n:{label}) RETURN n.id AS id"))).await.unwrap();
+    let mut rows = admin
+        .execute(query(&format!("MATCH (n:{label}) RETURN n.id AS id")))
+        .await
+        .unwrap();
     let mut out = Vec::new();
     while let Some(row) = rows.next().await.unwrap() {
         out.push(row.get::<String>("id").unwrap_or_default());
@@ -70,9 +76,7 @@ async fn label_ids(admin: &Graph, label: &str) -> Vec<String> {
 
 /// Sends a request through the router and returns `(status, parsed JSON body)`.
 async fn send(router: &Router, method: &str, path: &str, body: Option<Request<Body>>) -> (StatusCode, Value) {
-    let request = body.unwrap_or_else(|| {
-        Request::builder().method(method).uri(path).body(Body::empty()).unwrap()
-    });
+    let request = body.unwrap_or_else(|| Request::builder().method(method).uri(path).body(Body::empty()).unwrap());
     let response = router.clone().oneshot(request).await.unwrap();
     let status = response.status();
     let bytes = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
@@ -95,7 +99,13 @@ async fn happy_path_query_returns_results() {
     seed(&admin).await;
     let router = gateway_router().await;
 
-    let (status, body) = send(&router, "POST", "/v1/query", Some(query_request("MATCH (u:User) RETURN u.name AS name ORDER BY name"))).await;
+    let (status, body) = send(
+        &router,
+        "POST",
+        "/v1/query",
+        Some(query_request("MATCH (u:User) RETURN u.name AS name ORDER BY name")),
+    )
+    .await;
     assert_eq!(status, StatusCode::OK);
     assert!(body["results"].is_array());
     assert!(body["count"].as_u64().unwrap() >= 1);
@@ -175,7 +185,11 @@ async fn writes_are_rejected_through_http_and_graph_is_unchanged() {
         assert_eq!(body["error"], "QUERY_REJECTED", "expected QUERY_REJECTED for {m:?}");
     }
 
-    assert_eq!(before, user_count(&admin).await, "a rejected write must not change the graph");
+    assert_eq!(
+        before,
+        user_count(&admin).await,
+        "a rejected write must not change the graph"
+    );
     assert!(
         label_ids(&admin, "ScoutHttpProbe").await.is_empty(),
         "no probe node should have been created"

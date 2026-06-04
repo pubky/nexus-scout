@@ -112,7 +112,10 @@ pub fn router(scout: Scout, limits: HttpLimits) -> Router {
         .route("/ready", get(ready_handler))
         .route("/metrics", get(metrics_handler))
         .with_state(state)
-        .layer(TimeoutLayer::with_status_code(StatusCode::GATEWAY_TIMEOUT, limits.request_timeout))
+        .layer(TimeoutLayer::with_status_code(
+            StatusCode::GATEWAY_TIMEOUT,
+            limits.request_timeout,
+        ))
         .layer(TraceLayer::new_for_http())
         .layer(CatchPanicLayer::new())
         .layer(PropagateRequestIdLayer::x_request_id())
@@ -198,7 +201,11 @@ async fn query_handler(
     State(state): State<AppState>,
     ValidatedJson(req): ValidatedJson<QueryRequest>,
 ) -> Result<Json<QueryResponse>, ApiError> {
-    let response = state.scout.query(&req.cypher, req.params, req.limit).await.map_err(ApiError)?;
+    let response = state
+        .scout
+        .query(&req.cypher, req.params, req.limit)
+        .await
+        .map_err(ApiError)?;
     Ok(Json(response))
 }
 

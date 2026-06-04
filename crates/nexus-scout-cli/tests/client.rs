@@ -46,7 +46,10 @@ fn happy_query_prints_results_and_exits_zero() {
 
 #[test]
 fn rejected_query_prints_envelope_and_exits_two() {
-    let url = mock_server(400, r#"{"error":"QUERY_REJECTED","message":"no writes","hint":"read only"}"#);
+    let url = mock_server(
+        400,
+        r#"{"error":"QUERY_REJECTED","message":"no writes","hint":"read only"}"#,
+    );
     scout(&url)
         .args(["query", "MATCH (u) DETACH DELETE u"])
         .assert()
@@ -56,7 +59,10 @@ fn rejected_query_prints_envelope_and_exits_two() {
 
 #[test]
 fn timeout_maps_to_exit_three() {
-    let url = mock_server(504, r#"{"error":"QUERY_TIMEOUT","message":"too slow","hint":"add LIMIT"}"#);
+    let url = mock_server(
+        504,
+        r#"{"error":"QUERY_TIMEOUT","message":"too slow","hint":"add LIMIT"}"#,
+    );
     scout(&url).args(["query", "MATCH (n) RETURN n"]).assert().code(3);
 }
 
@@ -69,7 +75,11 @@ fn rate_limited_maps_to_exit_one() {
 #[test]
 fn schema_is_fetched_from_the_service() {
     let url = mock_server(200, r#"{"nodes":[],"relationships":[],"examples":[]}"#);
-    scout(&url).arg("schema").assert().success().stdout(predicates::str::contains("nodes"));
+    scout(&url)
+        .arg("schema")
+        .assert()
+        .success()
+        .stdout(predicates::str::contains("nodes"));
 }
 
 #[test]

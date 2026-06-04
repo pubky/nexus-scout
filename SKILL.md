@@ -1,12 +1,14 @@
 ---
 name: nexus-scout
-description: Use when you need facts from the Pubky social graph - who follows whom, trending tags, thread/reply history, author reputation, trust distance between users. Query the Neo4j graph with read-only Cypher via the `nexus-scout` CLI.
+description: Use when you need facts from the Pubky social graph - who follows whom, trending tags, thread/reply history, author reputation, trust distance between users. Query the Neo4j graph with read-only Cypher via the `scout` CLI.
 ---
 
 # Querying the Pubky social graph (nexus-scout)
 
-`nexus-scout` is a read-only gateway to the Pubky social graph. You write Cypher; it validates the
-query is read-only, runs it against Neo4j, and returns JSON.
+`scout` is a thin CLI client of the nexus-scout HTTP gateway, a read-only gateway to the Pubky social
+graph. You write Cypher; the gateway validates it is read-only, runs it against Neo4j, and returns
+JSON. Point `scout` at the gateway with `--server-url` or `NEXUS_SCOUT_URL` (default
+`http://localhost:8080`); it holds no database credentials.
 
 ## When to use
 
@@ -20,7 +22,7 @@ Reach for this when answering a question needs graph facts, for example:
 
 1. **Learn the schema first** (no database round-trip; cache the result):
    ```sh
-   nexus-scout schema
+   scout schema
    ```
    This returns the node types (`User`, `Post`, `Tag`, `File`) with their properties, the
    relationship types (`FOLLOWS`, `AUTHORED`, `TAGGED`, `REPLIED`, `REPOSTED`, `BOOKMARKED`,
@@ -28,13 +30,13 @@ Reach for this when answering a question needs graph facts, for example:
 
 2. **Write read-only Cypher and run it**:
    ```sh
-   nexus-scout query "MATCH (u:User)<-[f:FOLLOWS]-() RETURN u.name, count(f) AS followers ORDER BY followers DESC LIMIT 10"
+   scout query "MATCH (u:User)<-[f:FOLLOWS]-() RETURN u.name, count(f) AS followers ORDER BY followers DESC LIMIT 10"
    ```
 
 3. **Pass parameters** - typed values (numbers, arrays) via `--params-json`, simple strings via
    `--param key=value`:
    ```sh
-   nexus-scout query --params-json '{"since": 1709251200000}' \
+   scout query --params-json '{"since": 1709251200000}' \
      "MATCH (u:User)-[t:TAGGED]->(p:Post) WHERE t.indexed_at > \$since RETURN t.label, count(p) AS c ORDER BY c DESC"
    ```
 
@@ -54,18 +56,18 @@ over four node types (`User`, `Post`, `Tag`, `File`) and eight relationships (`F
 
 ```sh
 # Trending tags since a timestamp
-nexus-scout query --params-json '{"since": 1709251200000}' \
+scout query --params-json '{"since": 1709251200000}' \
   "MATCH (u:User)-[t:TAGGED]->(p:Post) WHERE t.indexed_at > \$since
    RETURN t.label, count(p) AS uses ORDER BY uses DESC LIMIT 20"
 
 # Reconstruct a reply thread under a post
-nexus-scout query --params-json '{"post_id": "pk:..."}' \
+scout query --params-json '{"post_id": "pk:..."}' \
   "MATCH (reply:Post)-[:REPLIED*0..5]->(root:Post {id: \$post_id})
    MATCH (a:User)-[:AUTHORED]->(reply)
    RETURN reply.content, a.name, reply.indexed_at ORDER BY reply.indexed_at LIMIT 50"
 
 # Follow distance from one user to another
-nexus-scout query --params-json '{"from": "pk:a", "to": "pk:b"}' \
+scout query --params-json '{"from": "pk:a", "to": "pk:b"}' \
   "MATCH path = shortestPath((me:User {id: \$from})-[:FOLLOWS*..5]->(them:User {id: \$to}))
    RETURN length(path) AS distance, [n IN nodes(path) | n.name] AS chain"
 ```
