@@ -1,19 +1,57 @@
-//! `nexus-scout` binary entry point.
+//! `nexus-scout` server binary: runs the gateway over HTTP (public) or stdio MCP.
 //!
-//! Parses the CLI, resolves configuration (defaults < environment, with the
-//! Neo4j URI optionally overridden by a CLI flag), and dispatches. JSON is
-//! written to stdout for both success and error envelopes; diagnostics go to
-//! stderr via `tracing`; the exit code encodes the outcome.
+//! Read-only Cypher requests are sent by *clients* (the `scout` CLI, an HTTP
+//! agent, or an MCP-native agent), not by this binary. Configuration is resolved
+//! from the environment (with the Neo4j URI optionally overridden by a flag);
+//! operational diagnostics go to stderr via `tracing`, and a non-zero exit code
+//! signals a startup failure.
 
-use std::process::ExitCode as ProcExitCode;
+use std::process::ExitCode;
 
-use clap::Parser;
-use nexus_scout::cli::{build_params, Cli, Command, ExitCode, QueryArgs, Transport};
-use nexus_scout::{Config, Error, Scout};
+use clap::{Parser, Subcommand, ValueEnum};
+use nexus_scout::{Config, Error};
+
+/// Read-only Cypher query gateway server for the Pubky social graph.
+#[derive(Debug, Parser)]
+#[command(name = "nexus-scout", version, about)]
+struct Cli {
+    /// Neo4j Bolt URI (overrides `NEO4J_URI`).
+    #[arg(long, global = true)]
+    neo4j_uri: Option<String>,
+
+    #[command(subcommand)]
+    command: Command,
+}
+
+/// The available subcommands.
+#[derive(Debug, Subcommand)]
+enum Command {
+    /// Run the gateway server.
+    Serve(ServeArgs),
+}
+
+/// Arguments to `serve`.
+#[derive(Debug, clap::Args)]
+struct ServeArgs {
+    /// Transport to serve on.
+    #[arg(long, value_enum, default_value_t = Transport::Http)]
+    transport: Transport,
+}
+
+/// Supported server transports.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+enum Transport {
+    /// Public HTTP API (Axum).
+    Http,
+    /// Model Context Protocol over stdio.
+    Stdio,
+    /// Server-sent events (not yet supported).
+    Sse,
+}
 
 #[tokio::main]
-async fn main() -> ProcExitCode {
-    // Default to the gateway's own info/warn output so the operational logs are
+async fn main() -> ExitCode {
+    // Default to the gateway's own info/warn output so operational logs are
     // visible out of the box; `RUST_LOG` still overrides when set.
     let filter = tracing_subscriber::EnvFilter::try_from_default_env()
         .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("nexus_scout=info,warn"));
@@ -22,86 +60,54 @@ async fn main() -> ProcExitCode {
         .with_writer(std::io::stderr)
         .init();
 
-    let cli = Cli::parse();
-    let code = run(cli).await;
-    ProcExitCode::from(code.code())
-}
-
-async fn run(cli: Cli) -> ExitCode {
-    // Schema needs neither a database nor configuration, so dispatch it before
-    // resolving config: a malformed env var must not break schema discovery.
-    if matches!(cli.command, Command::Schema) {
-        print_json(nexus_scout::schema());
-        return ExitCode::Ok;
-    }
-
-    let config = match load_config(cli.neo4j_uri) {
-        Ok(c) => c,
-        Err(e) => return fail(&e),
-    };
-
-    match cli.command {
-        Command::Query(args) => run_query(config, args).await,
-        Command::Serve(args) => serve(config, args.transport).await,
-        Command::Schema => unreachable!("handled before config resolution"),
-    }
-}
-
-async fn run_query(config: Config, args: QueryArgs) -> ExitCode {
-    let params = match build_params(&args.params, args.params_json.as_deref()) {
-        Ok(p) => p,
-        Err(e) => return fail(&e),
-    };
-    let scout = match Scout::connect(config).await {
-        Ok(s) => s,
-        Err(e) => return fail(&e),
-    };
-    match scout.query(&args.cypher, params, args.limit).await {
-        Ok(response) => {
-            print_json(&response);
-            ExitCode::Ok
+    match run(Cli::parse()).await {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(e) => {
+            eprintln!("error: {e}");
+            ExitCode::FAILURE
         }
-        Err(e) => fail(&e),
     }
+}
+
+async fn run(cli: Cli) -> Result<(), Error> {
+    match cli.command {
+        Command::Serve(args) => {
+            // Config is resolved before the server starts, so a misconfiguration
+            // fails closed with a message naming the offending variable.
+            let config = Config::builder().apply_env()?.maybe_neo4j_uri(cli.neo4j_uri).build();
+            serve(config, args.transport).await
+        }
+    }
+}
+
+async fn serve(config: Config, transport: Transport) -> Result<(), Error> {
+    match transport {
+        Transport::Http => serve_http_dispatch(config).await,
+        Transport::Stdio => serve_stdio_dispatch(config).await,
+        Transport::Sse => Err(Error::bad_request(
+            "the SSE transport is not yet supported; use --transport http or stdio",
+        )),
+    }
+}
+
+#[cfg(feature = "http")]
+async fn serve_http_dispatch(config: Config) -> Result<(), Error> {
+    nexus_scout::serve_http(config).await
+}
+
+#[cfg(not(feature = "http"))]
+#[expect(clippy::unused_async, reason = "must match the http-enabled signature")]
+async fn serve_http_dispatch(_config: Config) -> Result<(), Error> {
+    Err(Error::bad_request("this build was compiled without the `http` feature"))
 }
 
 #[cfg(feature = "mcp")]
-async fn serve(config: Config, transport: Transport) -> ExitCode {
-    match transport {
-        Transport::Stdio => match nexus_scout::serve_stdio(config).await {
-            Ok(()) => ExitCode::Ok,
-            Err(e) => fail(&e),
-        },
-        Transport::Sse => {
-            eprintln!("error: the SSE transport is not yet supported; use --transport stdio");
-            ExitCode::Internal
-        }
-    }
+async fn serve_stdio_dispatch(config: Config) -> Result<(), Error> {
+    nexus_scout::serve_stdio(config).await
 }
 
 #[cfg(not(feature = "mcp"))]
-#[expect(
-    clippy::unused_async,
-    reason = "must match the mcp-enabled serve() signature at the call site"
-)]
-async fn serve(_config: Config, _transport: Transport) -> ExitCode {
-    eprintln!("error: this build was compiled without the `mcp` feature; `serve` is unavailable");
-    ExitCode::Internal
-}
-
-fn load_config(neo4j_uri: Option<String>) -> Result<Config, Error> {
-    Ok(Config::builder().apply_env()?.maybe_neo4j_uri(neo4j_uri).build())
-}
-
-/// Prints an error envelope to stdout and returns its exit code.
-fn fail(err: &Error) -> ExitCode {
-    print_json(&err.to_response());
-    ExitCode::for_error(err)
-}
-
-fn print_json<T: serde::Serialize>(value: &T) {
-    match serde_json::to_string_pretty(value) {
-        Ok(s) => println!("{s}"),
-        Err(e) => eprintln!("error: failed to serialize output: {e}"),
-    }
+#[expect(clippy::unused_async, reason = "must match the mcp-enabled signature")]
+async fn serve_stdio_dispatch(_config: Config) -> Result<(), Error> {
+    Err(Error::bad_request("this build was compiled without the `mcp` feature"))
 }

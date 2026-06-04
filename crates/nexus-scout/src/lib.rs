@@ -22,7 +22,6 @@
 
 #![deny(missing_docs)]
 
-pub mod cli;
 mod config;
 mod convert;
 mod error;

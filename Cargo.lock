@@ -1059,8 +1059,10 @@ dependencies = [
 name = "nexus-scout-cli"
 version = "0.1.0"
 dependencies = [
+ "assert_cmd",
  "clap",
  "nexus-scout-types",
+ "predicates",
  "serde_json",
  "ureq",
 ]
