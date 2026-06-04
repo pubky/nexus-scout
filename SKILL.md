@@ -38,6 +38,49 @@ Reach for this when answering a question needs graph facts, for example:
      "MATCH (u:User)-[t:TAGGED]->(p:Post) WHERE t.indexed_at > \$since RETURN t.label, count(p) AS c ORDER BY c DESC"
    ```
 
+## Capabilities & limits
+
+`get_schema` is the source of truth; the examples below are starting points. Everything is read-only
+over four node types (`User`, `Post`, `Tag`, `File`) and eight relationships (`FOLLOWS`, `AUTHORED`,
+`TAGGED`, `REPLIED`, `REPOSTED`, `BOOKMARKED`, `MENTIONED`, `MUTED`).
+
+**Answerable** — map the question to a relationship:
+- Followers / following and counts → `FOLLOWS` (User→User)
+- A user's posts → `AUTHORED` (User→Post)
+- Reply threads → `REPLIED` (Post→Post); reposts → `REPOSTED` (Post→Post)
+- Tags on posts / trending tags → `TAGGED` (User→Post; the tag text is `t.label`)
+- Bookmarks → `BOOKMARKED`; mentions → `MENTIONED` (Post→User); mutes → `MUTED` (User→User)
+- Follow / trust distance between two users → variable-length `FOLLOWS` path (capped `*1..5`)
+
+```sh
+# Trending tags since a timestamp
+nexus-scout query --params-json '{"since": 1709251200000}' \
+  "MATCH (u:User)-[t:TAGGED]->(p:Post) WHERE t.indexed_at > \$since
+   RETURN t.label, count(p) AS uses ORDER BY uses DESC LIMIT 20"
+
+# Reconstruct a reply thread under a post
+nexus-scout query --params-json '{"post_id": "pk:..."}' \
+  "MATCH (reply:Post)-[:REPLIED*0..5]->(root:Post {id: \$post_id})
+   MATCH (a:User)-[:AUTHORED]->(reply)
+   RETURN reply.content, a.name, reply.indexed_at ORDER BY reply.indexed_at LIMIT 50"
+
+# Follow distance from one user to another
+nexus-scout query --params-json '{"from": "pk:a", "to": "pk:b"}' \
+  "MATCH path = shortestPath((me:User {id: \$from})-[:FOLLOWS*..5]->(them:User {id: \$to}))
+   RETURN length(path) AS distance, [n IN nodes(path) | n.name] AS chain"
+```
+
+**Not modeled** — `get_schema` shows nothing for these, so don't try:
+- No likes/reactions/upvotes or view/engagement counts — popularity is only inferable by counting
+  `FOLLOWS` / `TAGGED` / `REPOSTED` edges (`BOOKMARKED` is the only "save").
+- No direct messages, message bodies, or per-item privacy/visibility flags.
+- No edit or version history; the only time signal is `indexed_at` (Unix ms) — there is no separate
+  created / updated / deleted timeline.
+- No full-text/relevance search — match text with property predicates (`CONTAINS`, `STARTS WITH`,
+  `=`), which is exact/substring, not ranked.
+- `Tag` and `File` have no connecting relationship: tag text is the `label` property on `TAGGED`, and
+  files are found by scanning a property (`MATCH (f:File) WHERE f.owner_id = \$id ...`), not by traversal.
+
 ## Rules and guardrails
 
 - **Read-only only.** Any `CREATE`, `MERGE`, `SET`, `DELETE`, `REMOVE`, `DROP`, `FOREACH`, `LOAD`,
