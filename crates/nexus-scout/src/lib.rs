@@ -27,6 +27,8 @@ mod config;
 mod convert;
 mod error;
 mod executor;
+#[cfg(feature = "http")]
+mod http;
 mod params;
 mod response;
 mod schema;
@@ -41,6 +43,9 @@ pub use error::{Error, ErrorCode};
 pub use response::{ErrorResponse, QueryResponse};
 #[doc(inline)]
 pub use schema::{schema, GraphSchema, NodeSchema, RelationshipSchema};
+#[cfg(feature = "http")]
+#[doc(inline)]
+pub use http::serve_http;
 #[cfg(feature = "mcp")]
 #[doc(inline)]
 pub use server::serve_stdio;
@@ -124,6 +129,19 @@ impl Scout {
     #[must_use]
     pub fn schema(&self) -> &'static GraphSchema {
         schema::schema()
+    }
+
+    /// Returns the names of any server-side Neo4j cost bounds
+    /// (`db.transaction.timeout`, transaction memory limits) that are unset or
+    /// unbounded — empty means all are configured. Used by the HTTP readiness
+    /// gate and the production startup check.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error`] if the check cannot run (e.g. insufficient privilege to
+    /// read settings); callers treat that as "degraded", not "unbounded".
+    pub async fn verify_server_bounds(&self) -> Result<Vec<&'static str>, Error> {
+        self.inner.executor.verify_server_bounds().await
     }
 }
 

@@ -4,6 +4,7 @@
 //! there is exactly one list of defaults and one precedence chain. Environment
 //! variables and CLI flags both feed the builder; neither owns precedence.
 
+use std::net::SocketAddr;
 use std::time::Duration;
 
 use cypher_guard::Limits as GuardLimits;
@@ -88,6 +89,79 @@ impl Default for Limits {
     }
 }
 
+/// Denial-of-service limits for the public HTTP transport. These bound
+/// *aggregate* load (the [`Limits`] above bound a single request); see
+/// [`Config::http_limits`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct HttpLimits {
+    /// Maximum request body size; a larger body is rejected with `413`.
+    pub max_body_bytes: usize,
+    /// Maximum in-flight `/v1/query` requests; excess is shed with `429`.
+    pub max_concurrency: usize,
+    /// Maximum sustained `/v1/query` requests per second; excess is shed (`429`).
+    pub max_rps: u32,
+    /// Whole-request wall-clock timeout: a coarse backstop above the per-query
+    /// [`Config::query_timeout`].
+    pub request_timeout: Duration,
+}
+
+impl Default for HttpLimits {
+    fn default() -> Self {
+        Self {
+            max_body_bytes: 64 * 1024,
+            max_concurrency: 64,
+            max_rps: 50,
+            request_timeout: Duration::from_secs(30),
+        }
+    }
+}
+
+/// Deployment profile. In [`Profile::Production`] the gateway **fails closed** on
+/// misconfiguration that is only a warning in development: missing server-side
+/// Neo4j cost bounds, or plaintext Bolt to a remote host.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Profile {
+    /// Local/dev: misconfiguration is logged as a warning.
+    #[default]
+    Development,
+    /// Hosted: misconfiguration is a hard startup error.
+    Production,
+}
+
+impl std::fmt::Display for Profile {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Development => "development",
+            Self::Production => "production",
+        })
+    }
+}
+
+impl std::str::FromStr for Profile {
+    type Err = ParseProfileError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "development" | "dev" => Ok(Self::Development),
+            "production" | "prod" => Ok(Self::Production),
+            _ => Err(ParseProfileError),
+        }
+    }
+}
+
+/// Error returned when `NEXUS_SCOUT_PROFILE` is not a known profile.
+#[derive(Debug)]
+pub struct ParseProfileError;
+
+impl std::fmt::Display for ParseProfileError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("expected 'development' or 'production'")
+    }
+}
+
+impl std::error::Error for ParseProfileError {}
+
 /// Fully-resolved gateway configuration.
 #[derive(Debug, Clone)]
 #[non_exhaustive]
@@ -102,6 +176,14 @@ pub struct Config {
     pub query_timeout: Duration,
     /// Guardrail and resource limits.
     pub limits: Limits,
+    /// Address the public HTTP gateway binds to. Default `127.0.0.1:8080`
+    /// (safe-by-default: not directly public); set `HTTP_ADDR=0.0.0.0:8080`
+    /// behind a reverse proxy.
+    pub http_bind: SocketAddr,
+    /// HTTP-transport denial-of-service limits.
+    pub http_limits: HttpLimits,
+    /// Deployment profile (fail-closed in production).
+    pub profile: Profile,
 }
 
 impl Config {
@@ -129,6 +211,9 @@ impl Default for ConfigBuilder {
             neo4j_password: Secret::new(String::new()),
             query_timeout: Duration::from_secs(10),
             limits: Limits::default(),
+            http_bind: SocketAddr::from(([127, 0, 0, 1], 8080)),
+            http_limits: HttpLimits::default(),
+            profile: Profile::default(),
         })
     }
 }
@@ -184,6 +269,15 @@ impl ConfigBuilder {
         if let Some(ms) = parse_env::<u64>("QUERY_TIMEOUT_MS")? {
             self.0.query_timeout = Duration::from_millis(ms);
         }
+        let http = &mut self.0.http_limits;
+        parse_env_into("HTTP_MAX_BODY_BYTES", &mut http.max_body_bytes)?;
+        parse_env_into("HTTP_MAX_CONCURRENCY", &mut http.max_concurrency)?;
+        parse_env_into("HTTP_MAX_RPS", &mut http.max_rps)?;
+        if let Some(ms) = parse_env::<u64>("HTTP_REQUEST_TIMEOUT_MS")? {
+            http.request_timeout = Duration::from_millis(ms);
+        }
+        parse_env_into("HTTP_ADDR", &mut self.0.http_bind)?;
+        parse_env_into("NEXUS_SCOUT_PROFILE", &mut self.0.profile)?;
         Ok(self)
     }
 
@@ -282,5 +376,13 @@ mod tests {
         assert_eq!(value_of("MAX_PATH_DEPTH"), l.guard.max_path_depth.to_string());
         let timeout_ms = Config::builder().build().query_timeout.as_millis().to_string();
         assert_eq!(value_of("QUERY_TIMEOUT_MS"), timeout_ms);
+
+        let h = HttpLimits::default();
+        assert_eq!(value_of("HTTP_ADDR"), Config::builder().build().http_bind.to_string());
+        assert_eq!(value_of("HTTP_MAX_BODY_BYTES"), h.max_body_bytes.to_string());
+        assert_eq!(value_of("HTTP_MAX_CONCURRENCY"), h.max_concurrency.to_string());
+        assert_eq!(value_of("HTTP_MAX_RPS"), h.max_rps.to_string());
+        assert_eq!(value_of("HTTP_REQUEST_TIMEOUT_MS"), h.request_timeout.as_millis().to_string());
+        assert_eq!(value_of("NEXUS_SCOUT_PROFILE"), Profile::default().to_string());
     }
 }

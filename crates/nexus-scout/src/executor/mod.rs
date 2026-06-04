@@ -24,7 +24,7 @@ use neo4rs::{ConfigBuilder, Graph, Query};
 use serde_json::{Map, Value};
 use tokio::time::timeout;
 
-use crate::config::{Config, Limits};
+use crate::config::{Config, Limits, Profile};
 use crate::convert::{bolt_to_json, json_to_bolt};
 use crate::error::Error;
 use crate::response::QueryResponse;
@@ -37,12 +37,24 @@ const KEY_VALUE: &str = "value";
 /// Reserved JSON key for a row whose Bolt→JSON conversion failed (see `row_to_json`).
 const KEY_ROW_ERROR: &str = "_row_error";
 
-/// Logs a warning if `uri` connects to a non-local host without transport
-/// security: plaintext `bolt://`/`neo4j://`, or a `+ssc` scheme that encrypts but
-/// skips certificate validation (MITM-able). neo4rs derives encryption from the
-/// scheme, and the gateway passes the URI through unchanged, so this is the only
-/// place the insecure-for-remote case is surfaced.
-fn warn_if_insecure_uri(uri: &str) {
+/// A query slower than this is logged at `WARN` (with a fingerprint, never the
+/// text) so abuse can be triaged without logging user content.
+const SLOW_QUERY_THRESHOLD: Duration = Duration::from_secs(2);
+
+/// Neo4j settings that bound per-query cost. Verified at startup/readiness so a
+/// forgotten `neo4j.conf` line cannot leave the public endpoint unbounded.
+const REQUIRED_BOUNDS: [&str; 3] = [
+    "db.transaction.timeout",
+    "db.memory.transaction.max",
+    "dbms.memory.transaction.total.max",
+];
+
+/// Returns a reason if `uri` is insecure for a non-local host: plaintext
+/// `bolt://`/`neo4j://`, or a `+ssc` scheme that encrypts but skips certificate
+/// validation (MITM-able). neo4rs derives encryption from the scheme and the
+/// gateway passes the URI through unchanged, so this is the one place the
+/// insecure-for-remote case is detected. Loopback hosts are always fine.
+fn insecure_remote_reason(uri: &str) -> Option<&'static str> {
     let (scheme, rest) = uri.split_once("://").unwrap_or(("", uri));
     let scheme = scheme.to_ascii_lowercase();
     // Extract the host exactly: drop any path/query, optional `user@`, and the
@@ -54,16 +66,48 @@ fn warn_if_insecure_uri(uri: &str) {
         |v6| v6.split_once(']').map_or(host_port, |(h, _)| h),
     );
     let loopback = matches!(host, "localhost" | "127.0.0.1" | "::1") || host.starts_with("127.");
-    let plaintext = scheme == "bolt" || scheme == "neo4j";
-    let unvalidated_tls = scheme.ends_with("+ssc");
-    if !loopback && (plaintext || unvalidated_tls) {
-        tracing::warn!(
-            scheme = %scheme,
-            host = %host,
-            "Neo4j URI is unencrypted or skips certificate validation for a non-local host; \
-             use a 'bolt+s://' or 'neo4j+s://' URI for remote connections"
-        );
+    if loopback {
+        return None;
     }
+    if scheme == "bolt" || scheme == "neo4j" {
+        Some("is unencrypted (plaintext)")
+    } else if scheme.ends_with("+ssc") {
+        Some("skips TLS certificate validation (+ssc)")
+    } else {
+        None
+    }
+}
+
+/// A non-loopback Neo4j URI used over an insecure scheme in production.
+#[derive(Debug)]
+struct InsecureUri(&'static str);
+
+impl std::fmt::Display for InsecureUri {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "NEO4J_URI {} for a non-local host; use bolt+s:// for remote connections", self.0)
+    }
+}
+
+impl std::error::Error for InsecureUri {}
+
+/// Whether a `SHOW SETTINGS` value represents a real bound (`10s`, `512MiB`) as
+/// opposed to the unlimited sentinel (`0s`, `0B`, empty).
+fn is_bounded(value: &str) -> bool {
+    let num: String = value
+        .trim()
+        .chars()
+        .take_while(|c| c.is_ascii_digit() || *c == '.')
+        .collect();
+    num.parse::<f64>().is_ok_and(|n| n > 0.0)
+}
+
+/// A stable fingerprint of a query, for slow-query logs that must not contain the
+/// query text or parameters.
+fn query_fingerprint(cypher: &str) -> String {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    cypher.hash(&mut h);
+    format!("{:016x}", h.finish())
 }
 
 /// A cheaply-cloneable handle to a read-only Neo4j connection pool.
@@ -92,7 +136,13 @@ impl Executor {
     /// Returns [`Error`] if the driver configuration is invalid or the
     /// connection cannot be established.
     pub(crate) async fn connect(config: &Config) -> Result<Self, Error> {
-        warn_if_insecure_uri(&config.neo4j_uri);
+        if let Some(reason) = insecure_remote_reason(&config.neo4j_uri) {
+            if config.profile == Profile::Production {
+                tracing::error!(reason, "refusing to start: insecure NEO4J_URI for a non-local host in production");
+                return Err(Error::bad_config("NEO4J_URI", InsecureUri(reason)));
+            }
+            tracing::warn!(reason, "insecure Neo4j URI for a non-local host; use bolt+s:// for remote connections");
+        }
         let driver_cfg = ConfigBuilder::default()
             .uri(&config.neo4j_uri)
             .user(&config.neo4j_user)
@@ -161,12 +211,45 @@ impl Executor {
                 Err(Error::timeout(duration_ms(timeout_budget)))
             }
         };
-        tracing::debug!(
-            elapsed_ms = duration_ms(started.elapsed()),
-            ok = result.is_ok(),
-            "query executed"
-        );
+        let elapsed = started.elapsed();
+        tracing::debug!(elapsed_ms = duration_ms(elapsed), ok = result.is_ok(), "query executed");
+        if elapsed >= SLOW_QUERY_THRESHOLD {
+            // Fingerprint only: never log the query text or parameters.
+            tracing::warn!(
+                query_fingerprint = %query_fingerprint(query.cypher()),
+                elapsed_ms = duration_ms(elapsed),
+                row_count = result.as_ref().map_or(0, |r| r.count),
+                "slow query"
+            );
+        }
         result
+    }
+
+    /// Returns the names of any [`REQUIRED_BOUNDS`] server settings that are unset
+    /// or unbounded (empty = all configured). Runs `SHOW SETTINGS` as a **direct**
+    /// driver call: this is gateway-originated, not user input, so it deliberately
+    /// does not pass through the sanitizer (which denies `SHOW`).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error`] if the check itself cannot run (e.g. the connecting user
+    /// lacks permission to read settings); the caller treats that as "degraded",
+    /// not "unbounded".
+    pub(crate) async fn verify_server_bounds(&self) -> Result<Vec<&'static str>, Error> {
+        let query = neo4rs::query("SHOW SETTINGS YIELD name, value WHERE name IN $names RETURN name, value")
+            .param("names", REQUIRED_BOUNDS.to_vec());
+        let mut stream = self.inner.graph.execute(query).await.map_err(Error::from_neo4rs)?;
+        let mut bounded: std::collections::HashSet<&'static str> = std::collections::HashSet::new();
+        while let Some(row) = stream.next().await.map_err(Error::from_neo4rs)? {
+            let name = row.get::<String>("name").unwrap_or_default();
+            let value = row.get::<String>("value").unwrap_or_default();
+            if let Some(known) = REQUIRED_BOUNDS.iter().find(|b| **b == name) {
+                if is_bounded(&value) {
+                    bounded.insert(*known);
+                }
+            }
+        }
+        Ok(REQUIRED_BOUNDS.iter().copied().filter(|b| !bounded.contains(b)).collect())
     }
 }
 
@@ -239,4 +322,44 @@ fn row_budget(limits: &Limits, requested: Option<u32>) -> usize {
 
 fn duration_ms(d: Duration) -> u64 {
     u64::try_from(d.as_millis()).unwrap_or(u64::MAX)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn loopback_uris_are_never_insecure() {
+        for uri in ["bolt://localhost:7687", "bolt://127.0.0.1:7687", "neo4j://[::1]:7687", "bolt://127.5.5.5:7687"] {
+            assert_eq!(insecure_remote_reason(uri), None, "{uri}");
+        }
+    }
+
+    #[test]
+    fn remote_plaintext_and_ssc_are_flagged_but_tls_is_fine() {
+        assert!(insecure_remote_reason("bolt://neo4j.example.com:7687").is_some());
+        assert!(insecure_remote_reason("neo4j://db.internal:7687").is_some());
+        assert!(insecure_remote_reason("bolt+ssc://db.example.com:7687").is_some());
+        assert_eq!(insecure_remote_reason("bolt+s://db.example.com:7687"), None);
+        assert_eq!(insecure_remote_reason("neo4j+s://db.example.com:7687"), None);
+    }
+
+    #[test]
+    fn bounds_sentinels_are_unbounded() {
+        for unbounded in ["0s", "0B", "0", "0.00MiB", "", "  "] {
+            assert!(!is_bounded(unbounded), "{unbounded:?} should read as unbounded");
+        }
+        for bounded in ["10s", "512.00MiB", "64MiB", "1m30s"] {
+            assert!(is_bounded(bounded), "{bounded:?} should read as bounded");
+        }
+    }
+
+    #[test]
+    fn fingerprint_is_stable_and_leaks_no_text() {
+        let q = "MATCH (u:User {secret:'hunter2'}) RETURN u";
+        let fp = query_fingerprint(q);
+        assert_eq!(fp, query_fingerprint(q));
+        assert!(!fp.contains("hunter2"));
+        assert_ne!(fp, query_fingerprint("MATCH (u:User) RETURN u"));
+    }
 }

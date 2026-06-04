@@ -25,7 +25,8 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 neo4rs = "=0.8.0"
 # HTTP server tier (optional, behind the `http` feature on nexus-scout).
 axum = { version = "0.8", default-features = false, features = ["http1", "json", "tokio"] }
-tower = { version = "0.5", features = ["limit", "load-shed"] }
+# `util` provides ServiceExt::oneshot for DB-free handler tests.
+tower = { version = "0.5", features = ["util"] }
 tower-http = { version = "0.6", features = ["limit", "trace", "catch-panic", "request-id", "timeout"] }
 # Blocking HTTP client for the `scout` CLI (rustls; reuses the vendored TLS stack).
 ureq = { version = "2", default-features = false, features = ["tls"] }

@@ -27,15 +27,19 @@ tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 rmcp = { version = "1", features = ["server", "transport-io"], optional = true }
 schemars = { version = "1", optional = true }
+axum = { workspace = true, optional = true }
+tower-http = { workspace = true, optional = true }
 
 [dev-dependencies]
 assert_cmd = "2"
 predicates = "3"
 static_assertions = "1"
+tower = { workspace = true }
 
 [features]
-default = ["mcp"]
+default = ["http", "mcp"]
 mcp = ["dep:rmcp", "dep:schemars"]
+http = ["dep:axum", "dep:tower-http"]
 integration = []
 
 [lints]
