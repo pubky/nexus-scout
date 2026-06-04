@@ -19,6 +19,20 @@ fn schema_prints_json_without_a_database() {
 }
 
 #[test]
+fn schema_ignores_malformed_config_env() {
+    // `schema` needs neither a database nor valid configuration, so a malformed
+    // numeric env var must not break schema discovery.
+    let out = nexus_scout()
+        .env("MAX_RESULT_ROWS", "not-a-number")
+        .arg("schema")
+        .assert()
+        .success();
+    let stdout = String::from_utf8(out.get_output().stdout.clone()).unwrap();
+    let v: Value = serde_json::from_str(&stdout).expect("schema is valid JSON");
+    assert!(v["nodes"].is_array());
+}
+
+#[test]
 fn rejected_query_emits_envelope_on_stdout_and_exits_2() {
     let assert = nexus_scout()
         .args(["query", "MATCH (u) DETACH DELETE u"])

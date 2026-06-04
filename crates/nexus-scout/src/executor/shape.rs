@@ -55,7 +55,11 @@ impl RowShaper {
             return false;
         }
         let row_bytes = serialized_len(&row);
-        if self.bytes + row_bytes > self.byte_cap && !self.rows.is_empty() {
+        if self.bytes + row_bytes > self.byte_cap {
+            // Hard cap: a row that would push the serialized response over the
+            // cap is dropped, even if it is the first row, so the response is
+            // never larger than the cap. The caller sees `truncated` and should
+            // narrow its RETURN (project fewer/smaller fields).
             self.truncation = Truncation::ByteCap;
             return false;
         }
@@ -112,12 +116,23 @@ mod tests {
     }
 
     #[test]
-    fn byte_cap_truncates_but_keeps_at_least_one_row() {
-        // Cap below a single row's size: the first row is always kept, the
-        // second trips the byte cap.
-        let (rows, t) = drain(RowShaper::new(100, 1), 3);
+    fn byte_cap_truncates_on_multi_row_accumulation() {
+        // Rows that each fit but together exceed the cap: the cap acts between
+        // whole rows, so the first is kept and the second trips it.
+        let (rows, t) = drain(RowShaper::new(100, 10), 3);
         assert_eq!(rows.len(), 1);
         assert_eq!(t, Truncation::ByteCap);
+    }
+
+    #[test]
+    fn lone_oversized_row_is_dropped_and_flagged_truncated() {
+        // Hard cap: a single row larger than the whole byte cap is dropped, not
+        // returned, so the serialized response never exceeds the cap. The caller
+        // sees an empty, truncated result and must narrow its RETURN.
+        let (rows, t) = drain(RowShaper::new(100, 1), 1);
+        assert!(rows.is_empty(), "the oversized row must not be returned");
+        assert_eq!(t, Truncation::ByteCap, "and it is flagged truncated");
+        assert!(t.occurred());
     }
 
     #[test]

@@ -1,6 +1,8 @@
 # Local development + integration stack: Neo4j pinned to the version nexus runs
 # in production. Use `docker compose -f docker/docker-compose.yml up -d`, then run
-# scripts/neo4j_reader_setup.cypher once the database is healthy.
+# scripts/neo4j_reader_setup_community.cypher once the database is healthy (this
+# image is Community; the reader user it creates can write, so the sanitizer is
+# the sole write guard here).
 services:
   neo4j:
     image: neo4j:5.26-community

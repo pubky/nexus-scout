@@ -23,19 +23,22 @@ async fn main() -> ProcExitCode {
 }
 
 async fn run(cli: Cli) -> ExitCode {
-    let config = match load_config(cli.neo4j_uri.clone()) {
+    // Schema needs neither a database nor configuration, so dispatch it before
+    // resolving config: a malformed env var must not break schema discovery.
+    if matches!(cli.command, Command::Schema) {
+        print_json(&nexus_scout::schema());
+        return ExitCode::Ok;
+    }
+
+    let config = match load_config(cli.neo4j_uri) {
         Ok(c) => c,
         Err(e) => return fail(&e),
     };
 
     match cli.command {
-        Command::Schema => {
-            // Schema needs no database connection.
-            print_json(&nexus_scout::schema());
-            ExitCode::Ok
-        }
         Command::Query(args) => run_query(config, args).await,
         Command::Serve(args) => serve(config, args.transport).await,
+        Command::Schema => unreachable!("handled before config resolution"),
     }
 }
 

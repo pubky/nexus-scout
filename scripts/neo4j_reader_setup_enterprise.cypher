@@ -1,20 +1,19 @@
-// Provision the read-only database user that nexus-scout connects as.
+// Provision the read-only database user that nexus-scout connects as, on Neo4j
+// ENTERPRISE.
 //
 // This is defense layer 2: even if the sanitizer (layer 1) had a bug, this user
 // cannot modify data, touch the system database, run procedures, or change
 // schema. The server-side transaction timeout and memory limit are the real
 // bounds on expensive queries (the driver provides no per-query server timeout).
 //
+// The GRANT ROLE / DENY statements below are ENTERPRISE-only and error on
+// Community edition. For Community, use neo4j_reader_setup_community.cypher
+// (the sanitizer is the sole write guard there). See docs/adr/0002-defense-in-depth.md.
+//
 // Run against the DBMS as an administrator, e.g.:
-//   cat scripts/neo4j_reader_setup.cypher | cypher-shell -u neo4j -p <admin-pass>
+//   cat scripts/neo4j_reader_setup_enterprise.cypher | cypher-shell -u neo4j -p <admin-pass>
 //
 // Adjust the password before running in any real deployment.
-//
-// IMPORTANT: GRANT ROLE / DENY are Neo4j ENTERPRISE features. On COMMUNITY
-// edition there is no role-based access control - every user can write - so
-// defense layer 2 is unavailable and the sanitizer (layer 1) is the sole write
-// guard. See README "Security model". On Community, only the server-side
-// transaction timeout / memory bounds below apply.
 
 CREATE USER nexus_scout_reader IF NOT EXISTS
   SET PASSWORD 'change-me-in-production'

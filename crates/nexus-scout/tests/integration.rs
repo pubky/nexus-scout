@@ -1,8 +1,9 @@
 //! End-to-end tests against a live Neo4j. Gated behind the `integration` feature
 //! so the default test run stays database-free.
 //!
-//! Run with a database up (see `docker/docker-compose.yml`) and the reader role
-//! provisioned (`scripts/neo4j_reader_setup.cypher`):
+//! Run with a database up (see `docker/docker-compose.yml`) and the reader user
+//! provisioned (`scripts/neo4j_reader_setup_community.cypher`, or the
+//! `_enterprise` variant on Enterprise):
 //!
 //! ```text
 //! cargo nextest run -p nexus-scout --features integration
@@ -187,6 +188,47 @@ async fn reader_role_write_policy_matches_edition() {
             .await
             .unwrap();
     }
+}
+
+/// Proves defense layer 1 (the sanitizer) end to end through the public
+/// `Scout::query` path, and that a rejected write touches nothing. Unlike the
+/// reader-role matrix above, this is edition-independent: the sanitizer is the
+/// only write guard present on Community, so this is the test that actually
+/// covers the decided deployment. Each mutation must be rejected *and* leave the
+/// graph unchanged.
+#[tokio::test]
+async fn gateway_rejects_writes_and_leaves_graph_unchanged() {
+    let admin = admin_graph().await;
+    seed(&admin).await;
+    let before = user_count(&admin).await;
+
+    let scout = gateway().await;
+    let mutations = [
+        "CREATE (n:ScoutGatewayProbe {id:'x'})",
+        "MATCH (u:User) SET u.hacked = true",
+        "MATCH (u:User) REMOVE u.name",
+        "MERGE (n:ScoutGatewayProbe {id:'y'})",
+        "MATCH (u:User {id:'pk:alice'}) DETACH DELETE u",
+        "CREATE INDEX scout_gateway_probe IF NOT EXISTS FOR (n:User) ON (n.id)",
+        "CALL apoc.create.node(['X'], {}) YIELD node RETURN node",
+        "MATCH (u:User) CALL { WITH u DELETE u } RETURN count(*)",
+    ];
+    for m in mutations {
+        let err = scout
+            .query(m, Map::new(), None)
+            .await
+            .expect_err("the gateway must reject a write");
+        assert!(
+            err.is_rejected(),
+            "expected the sanitizer to reject {m:?}, got code {:?}",
+            err.code()
+        );
+    }
+
+    let after = user_count(&admin).await;
+    assert_eq!(before, after, "a rejected write must not change the graph");
+    let probes = string_column(&admin, "MATCH (n:ScoutGatewayProbe) RETURN n.id AS id", "id").await;
+    assert!(probes.is_empty(), "no probe node should have been created: {probes:?}");
 }
 
 /// The curated `get_schema` must not omit any node label or relationship type

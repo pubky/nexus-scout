@@ -55,3 +55,10 @@ convention.
 | [0006](adr/0006-curated-schema.md) | `get_schema` is a curated golden artifact, not introspection or type-derivation. |
 | [0007](adr/0007-error-model.md) | Error-as-struct with a private kind; serialize-only `ErrorCode` DTO. |
 | [0008](adr/0008-defer-nl-layer.md) | Defer the natural-language → Cypher layer. |
+
+## Security
+
+[`SECURITY_MATRIX.md`](SECURITY_MATRIX.md) is the version-pinned per-construct sanitizer policy
+(allow / deny / rewrite for every Cypher 5 clause), the accepted residual risks, and the re-audit
+checklist for Neo4j version bumps. Because the decided deployment is Neo4j Community (no RBAC), the
+sanitizer is the sole write guard, so its coverage is enumerated and tested rather than assumed.

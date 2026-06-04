@@ -169,7 +169,15 @@ fn row_to_json(row: &neo4rs::Row) -> Map<String, Value> {
             m.insert("value".into(), bolt_to_json(&other));
             m
         }
-        Err(_) => Map::new(),
+        // Converting a row to the universal `BoltType` does not fail in practice;
+        // if it ever does, surface an observable marker rather than a silent empty
+        // row, so dropped data is never mistaken for an absent result.
+        Err(e) => {
+            tracing::warn!(error = %e, "row conversion failed; returning an error marker row");
+            let mut m = Map::new();
+            m.insert("_row_error".into(), Value::String("row conversion failed".to_owned()));
+            m
+        }
     }
 }
 

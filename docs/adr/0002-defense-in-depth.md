@@ -16,7 +16,8 @@ not:
    administration clause and every namespaced procedure/function call before the query is executed.
 2. **Layer 2 - a read-only database user**: connect as a `reader`-role user with `DENY WRITE`, so
    even if layer 1 had a bug the connection cannot modify data. Provisioned by
-   `scripts/neo4j_reader_setup.cypher`. **Enterprise only** (see Consequences).
+   `scripts/neo4j_reader_setup_enterprise.cypher`; `scripts/neo4j_reader_setup_community.cypher`
+   creates only the user (no RBAC to grant). **Enterprise only** (see Consequences).
 3. **Deployment isolation**: nexus-scout runs against a **read replica that is re-cloned nightly**,
    not the primary. Writes therefore cannot reach the primary at all, and any corruption of the
    replica is wiped within a day.

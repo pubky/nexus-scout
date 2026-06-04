@@ -50,9 +50,13 @@ impl std::fmt::Display for Secret {
 pub struct Limits {
     /// Applied when the caller requests no `LIMIT`.
     pub default_limit: u32,
-    /// Hard ceiling on returned rows regardless of any query `LIMIT`.
+    /// Ceiling on rows *returned* (not on server-side work) regardless of any
+    /// query `LIMIT`.
     pub max_result_rows: u32,
-    /// Hard ceiling on the serialized byte size of the returned rows.
+    /// Hard ceiling on the serialized size of the returned rows: a row that would
+    /// push the response past it is dropped (and the result flagged truncated), so
+    /// the response is never larger than this. The server-side transaction memory
+    /// limit bounds what Neo4j materializes; this bounds what is returned.
     pub max_result_bytes: usize,
     pub max_param_count: usize,
     /// Serialized byte size across all parameters.

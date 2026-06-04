@@ -173,3 +173,26 @@ fn accepts_valid_read_queries() {
         );
     }
 }
+
+/// Every keyword the deny tables claim to block must actually be rejected by the
+/// classifier. This is the executable form of the `SECURITY_MATRIX` deny rows: it
+/// locks the table-to-classifier coupling, so a keyword added to a table (or a
+/// classifier refactor that stopped scanning one table) cannot silently leave a
+/// denied keyword unenforced, even without a hand-written corpus case.
+#[test]
+fn every_denied_keyword_is_enforced() {
+    let s = sanitizer();
+    for kw in cypher_guard::denied_keywords() {
+        // The classifier scans every word, so the surrounding text need not be
+        // valid Cypher; a leading denied word is enough.
+        let q = format!("{kw} (n) RETURN n");
+        match s.sanitize(&q) {
+            Ok(_) => panic!("denied keyword {kw:?} was accepted"),
+            Err(e) => assert!(
+                matches!(e.reason(), RejectReason::Mutation | RejectReason::AdminClause),
+                "denied keyword {kw:?} rejected for the wrong reason: {:?}",
+                e.reason()
+            ),
+        }
+    }
+}

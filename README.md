@@ -48,13 +48,19 @@ Output is JSON on **stdout** (both success and error envelopes, so `| jq` always
 |-----------|---------|---------|
 | Read-only validation | always | Blocks every mutation/admin clause and namespaced procedure call. |
 | Default row limit | 25 | Applied when the caller requests none. |
-| Max result rows | 100 | Hard ceiling regardless of any query `LIMIT`. |
-| Max result bytes | 1 MiB | Caps multi-row payloads. |
+| Max result rows | 100 | Caps rows *returned* (not server-side work), regardless of any query `LIMIT`. |
+| Max result bytes | 1 MiB | Hard ceiling on serialized response size; a row that would exceed it is dropped (flagged `truncated`). |
 | Variable-length paths | `*1..5` | Unbounded/over-deep paths are rewritten, not rejected. |
 | Query timeout | 10 s | Client liveness bound. |
 | Param count/bytes/depth | 32 / 8 KiB / 8 | Denial-of-service bounds on parameters. |
 
 All are configurable via environment variables (see [`.env.example`](.env.example)).
+
+The row and byte caps bound what is *returned*; they do not limit the work Neo4j does to produce a
+result (a broad scan, sort, or aggregation can be expensive before the first row). Server-side
+execution cost is bounded by the Neo4j `db.transaction.timeout` and transaction memory limit
+configured for the reader (see the setup scripts), not by this gateway; the 10 s client timeout only
+bounds caller liveness.
 
 Result columns are addressed **by name**; column order is not preserved (the driver yields an
 unordered map, so nexus-scout sorts keys for deterministic output).
@@ -71,15 +77,19 @@ Two independent layers plus a compile-time invariant:
 2. **Read-only database user (layer 2)** - a `DENY WRITE` reader role means even a sanitizer bug
    cannot modify data. **This requires Neo4j Enterprise**: Community edition has no role-based access
    control, so on Community the configured user can write and the sanitizer is the *sole* write
-   guard. See [`scripts/neo4j_reader_setup.cypher`](scripts/neo4j_reader_setup.cypher) and
-   [ADR-0002](docs/adr/0002-defense-in-depth.md).
+   guard. Provisioning is split by edition:
+   [`neo4j_reader_setup_community.cypher`](scripts/neo4j_reader_setup_community.cypher) (creates the
+   user only) and [`neo4j_reader_setup_enterprise.cypher`](scripts/neo4j_reader_setup_enterprise.cypher)
+   (adds the `DENY WRITE` reader role). See [ADR-0002](docs/adr/0002-defense-in-depth.md).
 
 **Deployment (decided):** this runs against **Neo4j Community** on a **read replica re-cloned
 nightly**. Layer 2 is therefore unavailable; the replica gives physical isolation (writes never reach
 the primary, intra-day corruption is wiped nightly) and the **sanitizer is the sole write guard**.
 Because of that the sanitizer is treated as security-critical: an exhaustive deny list (classic
 clauses plus GQL `INSERT`/`NODETACH`), an adversarial corpus, property tests, and continuous fuzzing
-with a guardrail oracle.
+with a guardrail oracle. Its full per-construct policy, the accepted residual risks, and the
+re-audit checklist for Neo4j version bumps are enumerated in
+[`docs/SECURITY_MATRIX.md`](docs/SECURITY_MATRIX.md).
 
 Parameters are bound natively (never interpolated), so parameter values are inert against injection.
 
