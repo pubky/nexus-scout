@@ -1,0 +1,10 @@
+# The DB-backed integration suites (tests/integration.rs, tests/http_integration.rs)
+# share one Neo4j and assert on global graph state (e.g. user counts before/after a
+# rejected write). Run in parallel they race, so serialize them into a single
+# one-at-a-time group. Unit tests in every other binary still run fully parallel.
+[test-groups]
+db-serial = { max-threads = 1 }
+
+[[profile.default.overrides]]
+filter = 'binary(integration) | binary(http_integration)'
+test-group = 'db-serial'
