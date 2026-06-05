@@ -131,12 +131,20 @@ impl Error {
     /// is the problem) maps to a query error (400); everything else — transient,
     /// connection, or protocol failures — maps to internal (500).
     pub(crate) fn from_neo4rs(e: neo4rs::Error) -> Self {
-        if let neo4rs::Error::Neo4j(ref n) = e {
-            // A statement error is the agent's query, not a gateway fault, so it is
-            // an actionable 400 rather than a 500 to blindly retry.
-            if is_query_statement_error(n.code()) {
-                return Self::new(Kind::Syntax, Some(Box::new(e)));
-            }
+        // A client statement error is the agent's query, not a gateway fault, so it
+        // is an actionable 400 rather than a 500 to blindly retry. A compile-time
+        // error arrives typed; a *runtime* failure raised mid-stream (e.g. a
+        // division-by-zero ArithmeticError) is wrapped by neo4rs 0.8 as
+        // UnexpectedMessage with the status code embedded in the text, so recover it
+        // from there too. The pinned neo4rs (see the version_pinning test) keeps that
+        // text stable. A Neo.DatabaseError.* execution failure stays internal (500).
+        let is_statement_error = match &e {
+            neo4rs::Error::Neo4j(n) => is_query_statement_error(n.code()),
+            neo4rs::Error::UnexpectedMessage(msg) => msg.contains(STATEMENT_ERROR_PREFIX),
+            _ => false,
+        };
+        if is_statement_error {
+            return Self::new(Kind::Syntax, Some(Box::new(e)));
         }
         Self::internal(Box::new(e))
     }
@@ -210,5 +218,26 @@ mod tests {
             "Neo.TransientError.General.DatabaseUnavailable"
         ));
         assert!(!is_query_statement_error("Neo.ClientError.Security.Unauthorized"));
+    }
+
+    #[test]
+    fn mid_stream_runtime_failure_classifies_as_query_error_not_internal() {
+        // neo4rs 0.8 wraps a mid-stream server FAILURE as UnexpectedMessage with the
+        // code in the text (a real example: division by zero). It must still be a 400.
+        let arith = neo4rs::Error::UnexpectedMessage(
+            "unexpected response for PULL: Ok(Failure(Failure { metadata: \
+             String { value: \"Neo.ClientError.Statement.ArithmeticError\" } }))"
+                .to_owned(),
+        );
+        assert_eq!(Error::from_neo4rs(arith).code(), ErrorCode::QuerySyntaxError);
+
+        // A genuine database execution failure (e.g. shortestPath common nodes) is a
+        // server-side fault and stays internal (500).
+        let db_exec = neo4rs::Error::UnexpectedMessage(
+            "unexpected response for PULL: Ok(Failure(Failure { metadata: \
+             String { value: \"Neo.DatabaseError.Statement.ExecutionFailed\" } }))"
+                .to_owned(),
+        );
+        assert_eq!(Error::from_neo4rs(db_exec).code(), ErrorCode::InternalError);
     }
 }

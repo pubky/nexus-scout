@@ -27,6 +27,12 @@ use shape::RowShaper;
 /// text) so abuse can be triaged without logging user content.
 const SLOW_QUERY_THRESHOLD: Duration = Duration::from_secs(2);
 
+/// Short fixed cap on the post-query rollback. Rollback is cleanup, not the query,
+/// so it must not re-spend the query budget: a timed-out query already waited the
+/// full budget, and giving the rollback the same budget doubled the time-to-error.
+/// If it cannot finish in time the connection is dropped (and reset by the pool).
+const ROLLBACK_TIMEOUT: Duration = Duration::from_secs(2);
+
 /// Neo4j settings that bound per-query cost. Verified at startup/readiness so a
 /// forgotten `neo4j.conf` line cannot leave the public endpoint unbounded.
 const REQUIRED_BOUNDS: [&str; 3] = [
@@ -229,7 +235,7 @@ impl Executor {
         let mut stream = match timeout(remaining(), txn.execute(neo_query)).await {
             Ok(r) => r.map_err(Error::from_neo4rs)?,
             Err(_elapsed) => {
-                rollback_quietly(txn, timeout_budget).await;
+                rollback_quietly(txn).await;
                 return Err(Error::timeout(duration_ms(timeout_budget)));
             }
         };
@@ -244,11 +250,11 @@ impl Executor {
                 Ok(response)
             }
             Ok(Err(e)) => {
-                rollback_quietly(txn, timeout_budget).await;
+                rollback_quietly(txn).await;
                 Err(e)
             }
             Err(_elapsed) => {
-                rollback_quietly(txn, timeout_budget).await;
+                rollback_quietly(txn).await;
                 Err(Error::timeout(duration_ms(timeout_budget)))
             }
         };
@@ -327,12 +333,13 @@ async fn read_rows(
     Ok(QueryResponse::new(rows, truncated))
 }
 
-async fn rollback_quietly(txn: neo4rs::Txn, budget: Duration) {
-    // Bound the rollback too (the connection may still be busy); on failure the server-side timeout is the backstop.
-    match timeout(budget, txn.rollback()).await {
+async fn rollback_quietly(txn: neo4rs::Txn) {
+    // Bounded by a short fixed cap, not the query budget (see ROLLBACK_TIMEOUT): the
+    // connection may still be busy, and on failure dropping it lets the pool reset it.
+    match timeout(ROLLBACK_TIMEOUT, txn.rollback()).await {
         Ok(Ok(())) => {}
-        Ok(Err(e)) => tracing::warn!(error = %e, "transaction rollback failed; relying on server-side timeout"),
-        Err(_) => tracing::warn!("transaction rollback timed out; relying on server-side timeout"),
+        Ok(Err(e)) => tracing::warn!(error = %e, "transaction rollback failed; connection will be recycled"),
+        Err(_) => tracing::warn!("transaction rollback timed out; connection will be recycled"),
     }
 }
 
