@@ -1,0 +1,58 @@
+name: test
+on:
+  push:
+    branches: [main]
+  pull_request:
+concurrency:
+  group: test-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  # DB-free gate: sanitizer corpus, property tests, contract tests, the seal test.
+  unit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@nextest
+      - run: cargo nextest run --workspace
+      - run: cargo build -p nexus-scout --no-default-features
+
+  # DB-backed gate: end-to-end queries + the read-only-user refusal matrix.
+  integration:
+    runs-on: ubuntu-latest
+    services:
+      neo4j:
+        image: neo4j:5.26-community
+        env:
+          NEO4J_AUTH: neo4j/testtest12
+          # The authoritative server-side backstop for runaway queries, verified
+          # by the gateway's /ready gate (mirrors docker/docker-compose.yml). All
+          # three are set so /ready passes in CI.
+          NEO4J_db_transaction_timeout: 10s
+          NEO4J_db_memory_transaction_max: 64m
+          NEO4J_dbms_memory_transaction_total_max: 512m
+        ports:
+          - 7687:7687
+          - 7474:7474
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@nextest
+      - name: Wait for Neo4j
+        run: |
+          for i in $(seq 1 30); do
+            nc -z 127.0.0.1 7687 && break
+            sleep 2
+          done
+      - name: Provision read-only user
+        # The reader role's GRANT/DENY lines are Enterprise-only and error on
+        # Community (no RBAC), so CI only creates the user. The integration suite
+        # is edition-aware and asserts the Community reality (sanitizer is the
+        # sole write guard); see docs/adr/0002-defense-in-depth.md.
+        run: |
+          docker exec -i "$(docker ps -qf ancestor=neo4j:5.26-community)" \
+            cypher-shell -u neo4j -p testtest12 \
+            "CREATE USER nexus_scout_reader IF NOT EXISTS SET PASSWORD 'change-me-in-production' SET PASSWORD CHANGE NOT REQUIRED;"
+      - run: cargo nextest run -p nexus-scout --features integration,http

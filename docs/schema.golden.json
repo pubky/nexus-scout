@@ -1,0 +1,59 @@
+{
+  "nodes": [
+    {
+      "label": "User",
+      "properties": {
+        "id": { "type": "string", "description": "Public key (pubky format)", "unique": true },
+        "name": { "type": "string" },
+        "bio": { "type": "string" },
+        "status": { "type": "string" },
+        "image": { "type": "string" },
+        "links": { "type": "string", "description": "JSON-encoded array" },
+        "indexed_at": { "type": "integer", "description": "Unix timestamp ms" }
+      }
+    },
+    {
+      "label": "Post",
+      "properties": {
+        "id": { "type": "string", "unique": true },
+        "content": { "type": "string" },
+        "kind": { "type": "string", "description": "short | long | image | video | file | link" },
+        "indexed_at": { "type": "integer", "description": "Unix timestamp ms" },
+        "attachments": { "type": "string", "description": "JSON-encoded array" }
+      }
+    },
+    {
+      "label": "Tag",
+      "properties": {
+        "label": { "type": "string" }
+      }
+    },
+    {
+      "label": "File",
+      "properties": {
+        "id": { "type": "string", "unique": true },
+        "owner_id": { "type": "string" },
+        "uri": { "type": "string" },
+        "src": { "type": "string" },
+        "size": { "type": "integer" },
+        "name": { "type": "string" },
+        "content_type": { "type": "string" }
+      }
+    }
+  ],
+  "relationships": [
+    { "type": "FOLLOWS", "from": "User", "to": "User", "properties": { "id": "string", "indexed_at": "integer" } },
+    { "type": "AUTHORED", "from": "User", "to": "Post", "properties": {} },
+    { "type": "TAGGED", "from": "User", "to": "Post", "properties": { "id": "string", "label": "string", "indexed_at": "integer" } },
+    { "type": "REPLIED", "from": "Post", "to": "Post", "properties": {} },
+    { "type": "REPOSTED", "from": "Post", "to": "Post", "properties": {} },
+    { "type": "BOOKMARKED", "from": "User", "to": "Post", "properties": { "id": "string", "indexed_at": "integer" } },
+    { "type": "MENTIONED", "from": "Post", "to": "User", "properties": {} },
+    { "type": "MUTED", "from": "User", "to": "User", "properties": { "indexed_at": "integer" } }
+  ],
+  "examples": [
+    "MATCH (u:User)<-[f:FOLLOWS]-() RETURN u.name, count(f) AS followers ORDER BY followers DESC LIMIT 10",
+    "MATCH (a:User)-[:AUTHORED]->(p:Post)-[:REPLIED]->(parent:Post) WHERE a.id = $user_id RETURN p.content, parent.content LIMIT 25",
+    "MATCH (u:User)-[t:TAGGED]->(p:Post) WHERE t.indexed_at > $since RETURN t.label, count(p) AS cnt ORDER BY cnt DESC LIMIT 20"
+  ]
+}
