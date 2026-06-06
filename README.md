@@ -52,16 +52,20 @@ curl -s -XPOST localhost:8080/v1/query -H 'content-type: application/json' \
   -d '{"cypher":"MATCH (u:User) RETURN u.name AS name LIMIT 5"}' | jq
 ```
 
-Success and error share one envelope shape: `{ results, count, truncated }` or
+Success and error share one envelope shape: `{ results, count, truncated, notes? }` or
 `{ error, message, hint }`. Codes map to status: `QUERY_REJECTED`/`QUERY_SYNTAX_ERROR` → 400,
-`QUERY_TIMEOUT` → 504, `RATE_LIMITED` → 429, `INTERNAL_ERROR` → 500; an oversized body → 413.
+`QUERY_TIMEOUT` → 504, `RATE_LIMITED` → 429, `INTERNAL_ERROR` → 500; an oversized body → 413. `notes`
+is an advisory string array describing any transform the gateway applied (e.g. a bounded
+variable-length path); it is omitted from the wire when empty. For `QUERY_SYNTAX_ERROR` the `message`
+carries the Neo4j parser detail (offending token, line, column) so the caller can self-correct.
 
-**Result row shape.** Each row in `results` is a JSON object keyed by your `RETURN` columns. A few
-keys are reserved: a returned **node** expands to its properties plus `_id` and `_labels`; a
-**relationship** adds `_id`, `_type`, `_start`, `_end`; a **single-column** row wraps its bare value
-under `value`; an uncommon temporal/spatial value becomes `{ "_unconvertible": "<tag>" }`; and a row
-that fails conversion becomes `{ "_row_error": "..." }`. Column order is not preserved (keys are
-sorted). These keys are pinned by tests in `crates/nexus-scout/src/convert.rs`.
+**Result row shape.** Each row in `results` is a JSON object keyed by your `RETURN` columns. Returned
+**nodes** and **relationships** are **properties-only** - just their property map, with no synthetic
+`_id`/`_labels`/`_type`/`_start`/`_end` keys (use `labels(n)` / `type(r)` for type info). A
+**single-column** row wraps its bare value under `value`; an uncommon temporal/spatial value becomes
+`{ "_unconvertible": "<tag>" }`; and a row that fails conversion becomes `{ "_row_error": "..." }`.
+Column order is not preserved (keys are sorted). These shapes are pinned by tests in
+`crates/nexus-scout/src/convert.rs`.
 
 ## `scout` CLI client
 
@@ -83,10 +87,10 @@ works); exit codes: `0` ok, `1` internal/transient, `2` rejected, `3` timeout.
 | Guardrail | Default | Purpose |
 |-----------|---------|---------|
 | Read-only validation | always | Blocks every mutation/admin clause and namespaced procedure call. |
-| Default row limit | 25 | Applied when the caller requests none. |
-| Max result rows | 100 | Caps rows *returned* (not server-side work), regardless of any query `LIMIT`. |
+| Default row limit | 25 | Applied when neither the caller nor the query sets a `LIMIT`. A top-level `LIMIT` in the query sets the budget (honored up to the ceiling); an explicit request `limit`/`--limit` overrides it. |
+| Max result rows | 100 | Hard ceiling on rows *returned* (not server-side work); any larger budget (request or in-query `LIMIT`) is capped here. |
 | Max result bytes | 1 MiB | Caps the summed returned-row payload bytes; a row that would exceed it is dropped (flagged `truncated`). The response envelope adds a small fixed overhead on top. |
-| Variable-length paths | `*1..5` | Unbounded/over-deep paths are rewritten, not rejected. |
+| Variable-length paths | `*1..5` | Unbounded/over-deep paths are rewritten, not rejected; the rewrite is reported in the response `notes`. |
 | Query timeout | 10 s | Client liveness bound. |
 | Param count/bytes/depth | 32 / 8 KiB / 8 | Denial-of-service bounds on parameters. |
 | Request body size (HTTP) | 64 KiB | Oversized request bodies rejected with `413`. |

@@ -125,6 +125,83 @@ async fn params_bind_natively_and_are_inert() {
     assert_eq!(resp.results[0]["echoed"], serde_json::json!("1) DETACH DELETE (n) //"));
 }
 
+/// F2: a query's own `LIMIT` drives the row budget without a `--limit` flag. The
+/// default budget is 25, so a `LIMIT 30` proves the in-query limit is honored
+/// (and `UNWIND range` needs no seed data).
+#[tokio::test]
+async fn query_limit_is_honored_above_the_default() {
+    let scout = gateway().await;
+    let resp = scout
+        .query("UNWIND range(1, 100) AS i RETURN i LIMIT 30", Map::new(), None)
+        .await
+        .expect("query succeeds");
+    assert_eq!(
+        resp.results.len(),
+        30,
+        "the query's own LIMIT should set the budget, not the default 25"
+    );
+}
+
+/// F2: an explicit requested limit still overrides the in-query `LIMIT`.
+#[tokio::test]
+async fn requested_limit_overrides_the_query_limit() {
+    let scout = gateway().await;
+    let resp = scout
+        .query("UNWIND range(1, 100) AS i RETURN i LIMIT 30", Map::new(), Some(10))
+        .await
+        .expect("query succeeds");
+    assert_eq!(
+        resp.results.len(),
+        10,
+        "the requested limit must override the in-query LIMIT"
+    );
+}
+
+/// F4: an over-deep variable-length path is bounded to `*1..5` and the rewrite is
+/// surfaced to the caller via `notes` (not silent).
+#[tokio::test]
+async fn bounded_path_is_surfaced_in_notes() {
+    let admin = admin_graph().await;
+    seed(&admin).await;
+
+    let scout = gateway().await;
+    let resp = scout
+        .query(
+            "MATCH p = (a:User)-[:FOLLOWS*1..10]->(b:User) RETURN length(p) AS len",
+            Map::new(),
+            None,
+        )
+        .await
+        .expect("query succeeds");
+    assert!(
+        resp.notes.iter().any(|n| n.contains("bounded to '*1..5'")),
+        "a *1..10 path should be bounded and surfaced via notes, got {:?}",
+        resp.notes
+    );
+}
+
+/// F1: a whole-node return is properties-only, with no synthetic `_id`/`_labels`
+/// leaked into the row.
+#[tokio::test]
+async fn whole_node_return_is_properties_only() {
+    let admin = admin_graph().await;
+    seed(&admin).await;
+
+    let scout = gateway().await;
+    let resp = scout
+        .query("MATCH (u:User {id:'pk:alice'}) RETURN u LIMIT 1", Map::new(), None)
+        .await
+        .expect("query succeeds");
+    let node = resp.results[0]["u"].as_object().expect("node is a JSON object");
+    assert!(node.contains_key("id"), "real properties are present: {node:?}");
+    for synthetic in ["_id", "_labels", "_type", "_start", "_end"] {
+        assert!(
+            !node.contains_key(synthetic),
+            "no synthetic {synthetic:?} key: {node:?}"
+        );
+    }
+}
+
 async fn edition(g: &Graph) -> String {
     scalar(g, "CALL dbms.components() YIELD edition RETURN edition", "edition").await
 }

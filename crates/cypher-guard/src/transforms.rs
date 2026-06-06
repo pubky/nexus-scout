@@ -7,25 +7,29 @@
 use crate::tokenizer::{Token, TokenKind};
 
 /// Rewrites each unbounded or over-deep `PathRange` token in `src` to respect
-/// `max_depth`, returning the (possibly unchanged) query string.
-pub(crate) fn bound_paths(src: &str, tokens: &[Token], max_depth: u32) -> String {
+/// `max_depth`, returning the (possibly unchanged) query string plus a note for
+/// each rewrite (empty when nothing was bounded).
+pub(crate) fn bound_paths(src: &str, tokens: &[Token], max_depth: u32) -> (String, Vec<String>) {
     let mut edits: Vec<(usize, usize, String)> = Vec::new();
+    let mut notes: Vec<String> = Vec::new();
     for t in tokens {
         if t.kind != TokenKind::PathRange {
             continue;
         }
-        if let Some(replacement) = rebound(t.text(src), max_depth) {
+        let original = t.text(src);
+        if let Some(replacement) = rebound(original, max_depth) {
+            notes.push(format!("variable-length path '{original}' bounded to '{replacement}'"));
             edits.push((t.start, t.end, replacement));
         }
     }
     if edits.is_empty() {
-        return src.to_owned();
+        return (src.to_owned(), notes);
     }
     let mut out = src.to_owned();
     for (start, end, replacement) in edits.into_iter().rev() {
         out.replace_range(start..end, &replacement);
     }
-    out
+    (out, notes)
 }
 
 /// Given the text of a `PathRange` token (starting with `*`), returns a bounded

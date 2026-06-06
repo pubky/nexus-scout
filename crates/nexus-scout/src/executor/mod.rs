@@ -19,7 +19,7 @@ use crate::config::{Config, Limits, Profile};
 use crate::convert::{json_to_bolt, row_to_json};
 use crate::error::Error;
 use crate::response::QueryResponse;
-use cypher_guard::SanitizedQuery;
+use cypher_guard::{ResultLimit, SanitizedQuery};
 
 use shape::RowShaper;
 
@@ -212,7 +212,7 @@ impl Executor {
         params: &Map<String, Value>,
         requested_limit: Option<u32>,
     ) -> Result<QueryResponse, Error> {
-        let budget = row_budget(&self.inner.limits, requested_limit);
+        let budget = row_budget(&self.inner.limits, requested_limit, query.result_limit());
         let mut neo_query = Query::new(query.cypher().to_owned());
         for (key, value) in params {
             neo_query = neo_query.param(key, json_to_bolt(value)?);
@@ -343,9 +343,22 @@ async fn rollback_quietly(txn: neo4rs::Txn) {
     }
 }
 
-fn row_budget(limits: &Limits, requested: Option<u32>) -> usize {
-    let effective = requested.unwrap_or(limits.default_limit).min(limits.max_result_rows);
-    effective as usize
+/// The number of rows to read, capped at `max_result_rows`. An explicit request
+/// limit (`--limit` / HTTP `limit`) always wins; otherwise the query's own
+/// top-level `LIMIT` is honored, so an agent's natural `... LIMIT 50` returns 50
+/// without needing a separate flag. A parameterized `LIMIT $n` reads up to the
+/// ceiling and lets the server-side `LIMIT` do the cut; no limit falls back to the
+/// default.
+fn row_budget(limits: &Limits, requested: Option<u32>, query_limit: ResultLimit) -> usize {
+    let n = match requested {
+        Some(r) => r,
+        None => match query_limit {
+            ResultLimit::Fixed(n) => n,
+            ResultLimit::Dynamic => limits.max_result_rows,
+            ResultLimit::None => limits.default_limit,
+        },
+    };
+    n.min(limits.max_result_rows) as usize
 }
 
 fn duration_ms(d: Duration) -> u64 {

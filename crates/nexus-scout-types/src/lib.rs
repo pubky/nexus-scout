@@ -121,10 +121,15 @@ pub struct QueryResponse {
     pub count: usize,
     /// `true` if the row or byte cap truncated the result.
     pub truncated: bool,
+    /// Advisory notes about transforms the gateway applied to the query (e.g. a
+    /// variable-length path that was bounded). Omitted from the wire when empty.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub notes: Vec<String>,
 }
 
 impl QueryResponse {
     /// Builds a response, deriving `count` from the rows so it cannot disagree.
+    /// `notes` start empty and are attached by the gateway after execution.
     #[must_use]
     pub fn new(results: Vec<Map<String, Value>>, truncated: bool) -> Self {
         let count = results.len();
@@ -132,6 +137,7 @@ impl QueryResponse {
             results,
             count,
             truncated,
+            notes: Vec::new(),
         }
     }
 }

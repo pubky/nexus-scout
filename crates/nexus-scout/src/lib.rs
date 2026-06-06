@@ -120,7 +120,14 @@ impl Scout {
     ) -> Result<QueryResponse, Error> {
         let sanitized = self.inner.sanitizer.sanitize(cypher)?;
         params::check_params(&params, &self.inner.limits)?;
-        self.inner.executor.execute(&sanitized, &params, requested_limit).await
+        let mut response = self
+            .inner
+            .executor
+            .execute(&sanitized, &params, requested_limit)
+            .await?;
+        // Surface any transforms (e.g. a bounded variable-length path) to the caller.
+        response.notes = sanitized.notes().to_vec();
+        Ok(response)
     }
 
     /// Returns the curated graph schema.

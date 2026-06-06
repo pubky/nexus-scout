@@ -16,10 +16,16 @@ enum Kind {
     Rejected(SanitizeError),
     RejectedParams(&'static str),
     BadRequest(String),
-    BadConfig { key: &'static str },
-    Timeout { ms: u64 },
+    BadConfig {
+        key: &'static str,
+    },
+    Timeout {
+        ms: u64,
+    },
     RateLimited,
-    Syntax,
+    /// A client statement error; carries the Neo4j detail (about the caller's own
+    /// query) so the agent can self-correct.
+    Syntax(String),
     Internal,
 }
 
@@ -81,7 +87,7 @@ impl Error {
             Kind::Rejected(_) | Kind::RejectedParams(_) | Kind::BadRequest(_) => ErrorCode::QueryRejected,
             Kind::Timeout { .. } => ErrorCode::QueryTimeout,
             Kind::RateLimited => ErrorCode::RateLimited,
-            Kind::Syntax => ErrorCode::QuerySyntaxError,
+            Kind::Syntax(_) => ErrorCode::QuerySyntaxError,
             Kind::BadConfig { .. } | Kind::Internal => ErrorCode::InternalError,
         }
     }
@@ -109,7 +115,7 @@ impl Error {
                 "Query exceeded the time budget. Add a LIMIT, narrow the MATCH pattern, or reduce path depth."
             }
             Kind::RateLimited => "Too many requests; slow down and retry after a short delay.",
-            Kind::Syntax => {
+            Kind::Syntax(_) => {
                 "The query could not be executed (invalid syntax, semantics, types, or arguments). Check it against the schema from get_schema; retrying it unchanged will not help."
             }
             Kind::BadConfig { .. } => {
@@ -144,9 +150,19 @@ impl Error {
             _ => false,
         };
         if is_statement_error {
-            return Self::new(Kind::Syntax, Some(Box::new(e)));
+            return Self::new(Kind::Syntax(statement_error_detail(&e)), Some(Box::new(e)));
         }
         Self::internal(Box::new(e))
+    }
+}
+
+/// The caller-facing detail for a statement error. The clean Neo4j message (about
+/// the caller's own query) is surfaced so an agent can self-correct; the raw
+/// neo4rs `UnexpectedMessage` wrapper (an internal debug string) is not echoed.
+fn statement_error_detail(e: &neo4rs::Error) -> String {
+    match e {
+        neo4rs::Error::Neo4j(n) if !n.message().is_empty() => n.message().to_owned(),
+        _ => "the query could not be executed".to_owned(),
     }
 }
 
@@ -168,7 +184,7 @@ impl std::fmt::Display for Error {
             Kind::BadConfig { key } => write!(f, "invalid value for environment variable {key}"),
             Kind::Timeout { ms } => write!(f, "query exceeded {ms}ms timeout"),
             Kind::RateLimited => f.write_str("rate limit exceeded"),
-            Kind::Syntax => f.write_str("the query could not be executed"),
+            Kind::Syntax(detail) => f.write_str(detail),
             Kind::Internal => f.write_str("internal error"),
         }
     }
@@ -239,5 +255,21 @@ mod tests {
                 .to_owned(),
         );
         assert_eq!(Error::from_neo4rs(db_exec).code(), ErrorCode::InternalError);
+    }
+
+    #[test]
+    fn statement_error_response_carries_a_message() {
+        // The raw neo4rs UnexpectedMessage wrapper is not echoed; it falls back to
+        // the generic detail. (A real Neo4j(n) error surfaces n.message() — covered
+        // by the live integration suite.)
+        let arith = neo4rs::Error::UnexpectedMessage(
+            "unexpected response for PULL: Ok(Failure(Failure { metadata: \
+             String { value: \"Neo.ClientError.Statement.ArithmeticError\" } }))"
+                .to_owned(),
+        );
+        let resp = Error::from_neo4rs(arith).to_response();
+        assert_eq!(resp.error, ErrorCode::QuerySyntaxError);
+        assert_eq!(resp.message, "the query could not be executed");
+        assert!(!resp.hint.is_empty());
     }
 }

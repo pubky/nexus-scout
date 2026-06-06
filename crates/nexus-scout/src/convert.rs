@@ -19,11 +19,6 @@ const MAX_JSON_DEPTH: usize = 128;
 
 // Reserved JSON keys for the result-row wire shape. `value` is unprefixed; the
 // rest are `_`-prefixed.
-const KEY_ID: &str = "_id";
-const KEY_LABELS: &str = "_labels";
-const KEY_TYPE: &str = "_type";
-const KEY_START: &str = "_start";
-const KEY_END: &str = "_end";
 const KEY_UNCONVERTIBLE: &str = "_unconvertible";
 /// Wraps a single-column row's bare value (see [`row_to_json`]).
 const KEY_VALUE: &str = "value";
@@ -53,23 +48,15 @@ fn bolt_to_json_depth(value: &BoltType, depth: usize) -> Value {
         BoltType::List(list) => bolt_list_to_json(list, depth),
         BoltType::Map(map) => Value::Object(bolt_map_to_json(map, depth)),
         BoltType::Bytes(b) => Value::String(base64::engine::general_purpose::STANDARD.encode(&b.value)),
-        BoltType::Node(n) => {
-            let mut obj = entity_obj(&n.properties, n.id.value, depth);
-            obj.insert(KEY_LABELS.into(), bolt_list_to_json(&n.labels, depth));
-            Value::Object(obj)
-        }
-        BoltType::Relation(r) => {
-            let mut obj = entity_obj(&r.properties, r.id.value, depth);
-            obj.insert(KEY_TYPE.into(), Value::String(r.typ.value.clone()));
-            obj.insert(KEY_START.into(), Value::Number(r.start_node_id.value.into()));
-            obj.insert(KEY_END.into(), Value::Number(r.end_node_id.value.into()));
-            Value::Object(obj)
-        }
-        BoltType::UnboundedRelation(r) => {
-            let mut obj = entity_obj(&r.properties, r.id.value, depth);
-            obj.insert(KEY_TYPE.into(), Value::String(r.typ.value.clone()));
-            Value::Object(obj)
-        }
+        // Nodes and relationships serialize to their property map only. Internal
+        // Neo4j identity fields (`_id`/`_labels`/`_type`/`_start`/`_end`) are
+        // deliberately omitted: they are implementation internals (distinct from
+        // the public `id` property), they are noise for callers, and emitting them
+        // would let a synthetic key clobber a real property of the same name. Use
+        // `labels(n)` / `type(r)` explicitly to retrieve those.
+        BoltType::Node(n) => Value::Object(bolt_map_to_json(&n.properties, depth)),
+        BoltType::Relation(r) => Value::Object(bolt_map_to_json(&r.properties, depth)),
+        BoltType::UnboundedRelation(r) => Value::Object(bolt_map_to_json(&r.properties, depth)),
         BoltType::Path(p) => {
             let mut obj = Map::new();
             obj.insert("nodes".into(), bolt_list_to_json(&p.nodes, depth));
@@ -87,14 +74,6 @@ fn bolt_to_json_depth(value: &BoltType, depth: usize) -> Value {
         BoltType::LocalDateTime(_) => unconvertible("local_date_time"),
         BoltType::DateTimeZoneId(_) => unconvertible("date_time_zone_id"),
     }
-}
-
-/// Assembles the shared graph-entity object: the entity's properties followed by
-/// its reserved `_id` key (nodes add `_labels`; relationships add `_type` etc.).
-fn entity_obj(properties: &BoltMap, id: i64, depth: usize) -> Map<String, Value> {
-    let mut obj = bolt_map_to_json(properties, depth);
-    obj.insert(KEY_ID.into(), Value::Number(id.into()));
-    obj
 }
 
 fn bolt_list_to_json(list: &BoltList, depth: usize) -> Value {
@@ -290,7 +269,8 @@ mod tests {
     }
 
     #[test]
-    fn node_json_shape_is_stable() {
+    fn node_is_properties_only() {
+        // A whole-node return yields just its properties: no internal `_id`/`_labels`.
         let mut props = BoltMap::default();
         props.put("name".into(), BoltType::String(BoltString::from("Alice")));
         let node = BoltNode::new(
@@ -298,14 +278,11 @@ mod tests {
             BoltList::from(vec![BoltType::String(BoltString::from("User"))]),
             props,
         );
-        assert_eq!(
-            bolt_to_json(&BoltType::Node(node)),
-            json!({"name": "Alice", "_id": 7, "_labels": ["User"]})
-        );
+        assert_eq!(bolt_to_json(&BoltType::Node(node)), json!({"name": "Alice"}));
     }
 
     #[test]
-    fn relation_json_shape_is_stable() {
+    fn relation_is_properties_only() {
         let mut props = BoltMap::default();
         props.put("since".into(), BoltType::Integer(BoltInteger::new(2020)));
         let rel = BoltRelation {
@@ -315,18 +292,23 @@ mod tests {
             typ: BoltString::from("FOLLOWS"),
             properties: props,
         };
-        assert_eq!(
-            bolt_to_json(&BoltType::Relation(rel)),
-            json!({"since": 2020, "_id": 3, "_type": "FOLLOWS", "_start": 1, "_end": 2})
-        );
+        // No internal `_id`/`_type`/`_start`/`_end`.
+        assert_eq!(bolt_to_json(&BoltType::Relation(rel)), json!({"since": 2020}));
     }
 
     #[test]
-    fn unbounded_relation_json_shape_is_stable() {
+    fn unbounded_relation_is_properties_only() {
         let rel = BoltUnboundedRelation::new(BoltInteger::new(5), BoltString::from("TAGGED"), BoltMap::default());
-        assert_eq!(
-            bolt_to_json(&BoltType::UnboundedRelation(rel)),
-            json!({"_id": 5, "_type": "TAGGED"})
-        );
+        assert_eq!(bolt_to_json(&BoltType::UnboundedRelation(rel)), json!({}));
+    }
+
+    #[test]
+    fn a_property_named_id_is_not_clobbered() {
+        // Regression: previously a synthetic `_id` would overwrite a real `_id`
+        // property. With properties-only, the real property is preserved verbatim.
+        let mut props = BoltMap::default();
+        props.put("_id".into(), BoltType::String(BoltString::from("real-value")));
+        let node = BoltNode::new(BoltInteger::new(7), BoltList::from(vec![]), props);
+        assert_eq!(bolt_to_json(&BoltType::Node(node)), json!({"_id": "real-value"}));
     }
 }

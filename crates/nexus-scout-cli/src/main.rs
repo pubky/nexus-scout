@@ -47,7 +47,7 @@ struct QueryArgs {
     #[arg(long)]
     params_json: Option<String>,
 
-    /// Override the row limit (capped server-side).
+    /// Force the row cap, overriding any LIMIT in the query (capped server-side).
     #[arg(long)]
     limit: Option<u32>,
 }

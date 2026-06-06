@@ -89,8 +89,14 @@ scout query --params-json '{"from": "pk:a", "to": "pk:b"}' \
   `CALL`, or admin clause (`USE`, `SHOW`, `PROFILE`, ...) is rejected. Namespaced calls like
   `apoc.*` / `db.*` / `gds.*` are rejected too. Bare functions (`count()`, `collect()`,
   `shortestPath()`, `datetime()`, ...) are fine.
-- **Limits**: if you omit `LIMIT`, you get 25 rows; the hard ceiling is 100. A large `LIMIT` is
-  capped. Variable-length paths are capped at `*1..5` (write `*` and it becomes `*1..5`).
+- **Limits**: your query's own `LIMIT` is honored - write `... LIMIT 50` and you get up to 50 rows,
+  no flag needed. Omit `LIMIT` and you get 25; the hard ceiling is 100, so any larger `LIMIT` is
+  capped at 100. (`--limit N` / the HTTP `limit` field forces the cap, overriding the in-query
+  `LIMIT`.) Variable-length paths are capped at `*1..5` (write `*` and it becomes `*1..5`); when the
+  gateway bounds a path it tells you so in the response `notes`.
+- **Whole-node / whole-relationship returns are properties-only.** `RETURN n` gives just the node's
+  properties (no internal `_id`/`_labels`); for type info use `labels(n)` / `type(r)`, and prefer
+  returning the columns you need (`RETURN n.name, n.id`).
 - **Timeout**: queries are bounded at ~10 s. If you hit `QUERY_TIMEOUT`, add a `LIMIT`, narrow the
   `MATCH`, or reduce path depth.
 - **Address result columns by name** - column order in the JSON is not guaranteed.
@@ -103,12 +109,17 @@ Success:
 ```json
 { "results": [ { "u.name": "Alice", "followers": 142 } ], "count": 1, "truncated": false }
 ```
-`truncated: true` means a guardrail capped the result - add a tighter `LIMIT` or narrow `RETURN`.
+`truncated: true` means a guardrail capped the result - add a tighter `LIMIT` or narrow `RETURN`. An
+optional `notes` array (present only when non-empty) reports transforms the gateway applied, e.g.
+`"notes": ["variable-length path '*1..10' bounded to '*1..5'"]` - read it when a path/distance answer
+looks shorter than you asked for.
 
 Error:
 ```json
 { "error": "QUERY_REJECTED", "message": "...", "hint": "..." }
 ```
-Read `hint` and adjust. Error codes: `QUERY_REJECTED` (fix the query), `QUERY_TIMEOUT` (narrow it),
-`QUERY_SYNTAX_ERROR` (fix Cypher syntax), `INTERNAL_ERROR` (retry). Exit codes mirror these
-(0 ok, 2 rejected, 3 timeout, 1 internal), and the JSON envelope is always on stdout for `jq`.
+Read `hint` and adjust. For `QUERY_SYNTAX_ERROR` the `message` carries the Neo4j parser detail (the
+offending token, line, and column) so you can fix the Cypher directly. Error codes: `QUERY_REJECTED`
+(fix the query), `QUERY_TIMEOUT` (narrow it), `QUERY_SYNTAX_ERROR` (fix Cypher syntax),
+`INTERNAL_ERROR` (retry). Exit codes mirror these (0 ok, 2 rejected, 3 timeout, 1 internal), and the
+JSON envelope is always on stdout for `jq`.
