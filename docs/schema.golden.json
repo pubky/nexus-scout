@@ -45,6 +45,7 @@
     { "type": "FOLLOWS", "from": "User", "to": "User", "properties": { "id": "string", "indexed_at": "integer" } },
     { "type": "AUTHORED", "from": "User", "to": "Post", "properties": {} },
     { "type": "TAGGED", "from": "User", "to": "Post", "properties": { "id": "string", "label": "string", "indexed_at": "integer" } },
+    { "type": "TAGGED", "from": "User", "to": "User", "properties": { "id": "string", "label": "string", "indexed_at": "integer" } },
     { "type": "REPLIED", "from": "Post", "to": "Post", "properties": {} },
     { "type": "REPOSTED", "from": "Post", "to": "Post", "properties": {} },
     { "type": "BOOKMARKED", "from": "User", "to": "Post", "properties": { "id": "string", "indexed_at": "integer" } },
@@ -54,6 +55,7 @@
   "examples": [
     "MATCH (u:User)<-[f:FOLLOWS]-() RETURN u.name, count(f) AS followers ORDER BY followers DESC LIMIT 10",
     "MATCH (a:User)-[:AUTHORED]->(p:Post)-[:REPLIED]->(parent:Post) WHERE a.id = $user_id RETURN p.content, parent.content LIMIT 25",
-    "MATCH (u:User)-[t:TAGGED]->(p:Post) WHERE t.indexed_at > $since RETURN t.label, count(p) AS cnt ORDER BY cnt DESC LIMIT 20"
+    "MATCH (u:User)-[t:TAGGED]->(p:Post) WHERE t.indexed_at > $since RETURN t.label, count(p) AS cnt ORDER BY cnt DESC LIMIT 20",
+    "MATCH (tagger:User)-[t:TAGGED]->(u:User {id: $user_id}) RETURN t.label AS reputation, count(*) AS n ORDER BY n DESC LIMIT 20"
   ]
 }

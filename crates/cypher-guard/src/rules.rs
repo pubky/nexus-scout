@@ -82,6 +82,12 @@ pub(crate) fn classify(tokens: &[Token], src: &str) -> Result<(), SanitizeError>
         return Err(SanitizeError::new(RejectReason::NamespacedCall, Some(span)));
     }
 
+    // Quantified path patterns have unbounded traversal cost (the `*1..5` cap only
+    // bounds classic variable-length relationships, not these).
+    if let Some(span) = find_quantified_path(&significant, src) {
+        return Err(SanitizeError::new(RejectReason::QuantifiedPath, Some(span)));
+    }
+
     let first_word = significant.iter().find(|t| t.kind == TokenKind::Word);
     match first_word {
         Some(t) if in_table(t.text(src), READ_ENTRY) => {}
@@ -90,6 +96,45 @@ pub(crate) fn classify(tokens: &[Token], src: &str) -> Result<(), SanitizeError>
     }
 
     Ok(())
+}
+
+/// Finds a quantified path pattern — a parenthesized group that contains a
+/// relationship and is immediately followed by a quantifier `+`, `*`, or `{` — and
+/// returns its byte span. Requiring a relationship inside the parens distinguishes a
+/// real QPP from arithmetic like `(a + b) * 2` or `(x)*2` (no relationship → not a
+/// QPP). A relationship inside is a `-[` detail bracket or an `->`/`<-` arrow.
+fn find_quantified_path(sig: &[&Token], src: &str) -> Option<Range<usize>> {
+    // Stack of open parens: (index in `sig`, whether a relationship was seen inside).
+    let mut stack: Vec<(usize, bool)> = Vec::new();
+    for i in 0..sig.len() {
+        if punct_is(sig[i], src, b'(') {
+            stack.push((i, false));
+        } else if is_relationship_at(sig, i, src) {
+            if let Some(top) = stack.last_mut() {
+                top.1 = true;
+            }
+        } else if punct_is(sig[i], src, b')') {
+            if let Some((open, saw_rel)) = stack.pop() {
+                let next_is_quantifier = sig
+                    .get(i + 1)
+                    .is_some_and(|n| punct_is(n, src, b'+') || punct_is(n, src, b'*') || punct_is(n, src, b'{'));
+                if saw_rel && next_is_quantifier {
+                    return Some(sig[open].start..sig[i + 1].end);
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Whether the token at `i` marks a relationship: a `-[` detail bracket, or an `->`
+/// / `<-` arrow head (so both `-[:R]->` and bare `-->`/`<--` patterns count).
+fn is_relationship_at(sig: &[&Token], i: usize, src: &str) -> bool {
+    let prev_is = |c: u8| i > 0 && punct_is(sig[i - 1], src, c);
+    let next_is = |c: u8| sig.get(i + 1).is_some_and(|t| punct_is(t, src, c));
+    (punct_is(sig[i], src, b'[') && prev_is(b'-'))
+        || (punct_is(sig[i], src, b'>') && prev_is(b'-'))
+        || (punct_is(sig[i], src, b'<') && next_is(b'-'))
 }
 
 /// A token that can name a namespace segment. Backtick-quoted segments count, else

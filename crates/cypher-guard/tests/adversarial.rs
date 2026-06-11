@@ -93,6 +93,20 @@ const REJECT: &[(&str, RejectReason)] = &[
         "MATCH (n) RETURN `apoc`.`cypher`.`doIt`('CREATE (x)', {}) AS r",
         RejectReason::NamespacedCall,
     ),
+    // --- Quantified path patterns (unbounded traversal cost) ---
+    (
+        "MATCH p=((a:User)-[:FOLLOWS]->(b:User)){1,3} RETURN count(p)",
+        RejectReason::QuantifiedPath,
+    ),
+    (
+        "MATCH ((a)-[:FOLLOWS]->(b))+ RETURN a LIMIT 5",
+        RejectReason::QuantifiedPath,
+    ),
+    ("MATCH ((a)-->(b))* RETURN a LIMIT 5", RejectReason::QuantifiedPath),
+    (
+        "MATCH (s:User)((a)-[:FOLLOWS]->(b)){2,}(e:User) RETURN s LIMIT 5",
+        RejectReason::QuantifiedPath,
+    ),
     // --- Admin / selector clauses ---
     ("USE system MATCH (n) RETURN n", RejectReason::AdminClause),
     ("SHOW USERS", RejectReason::AdminClause),
@@ -145,6 +159,9 @@ const ACCEPT: &[&str] = &[
     "MATCH (n:User) RETURN n.a.b LIMIT 5",                                   // nested property access
     "MATCH (n:User) RETURN n.`a``b` LIMIT 5",                                // escaped (doubled) backtick in identifier
     "MATCH (n:User) RETURN n.`DELETE``CREATE` LIMIT 5", // keywords inside a backtick escape are opaque data
+    "RETURN (1 + 2) * 3 AS n",                          // parenthesized arithmetic, not a quantified path
+    "MATCH (u:User) RETURN (u.indexed_at / 1000) + 1 AS s LIMIT 5", // grouped expression then '+'
+    "MATCH (a:User) WHERE (a)-[:FOLLOWS]->(:User) RETURN a.name LIMIT 5", // pattern predicate, not quantified
 ];
 
 #[test]

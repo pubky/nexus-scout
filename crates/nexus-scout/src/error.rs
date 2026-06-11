@@ -26,6 +26,9 @@ enum Kind {
     /// A client statement error; carries the Neo4j detail (about the caller's own
     /// query) so the agent can self-correct.
     Syntax(String),
+    /// The query exceeded a database resource limit (e.g. transaction memory).
+    /// Server-side (so still a 500), but the fix is to shrink the query, not retry.
+    ResourceExhausted,
     Internal,
 }
 
@@ -88,7 +91,7 @@ impl Error {
             Kind::Timeout { .. } => ErrorCode::QueryTimeout,
             Kind::RateLimited => ErrorCode::RateLimited,
             Kind::Syntax(_) => ErrorCode::QuerySyntaxError,
-            Kind::BadConfig { .. } | Kind::Internal => ErrorCode::InternalError,
+            Kind::BadConfig { .. } | Kind::ResourceExhausted | Kind::Internal => ErrorCode::InternalError,
         }
     }
 
@@ -121,6 +124,9 @@ impl Error {
             Kind::BadConfig { .. } => {
                 "An environment variable has an invalid value (see the message and .env.example); correct it and restart."
             }
+            Kind::ResourceExhausted => {
+                "The query needs more memory than the database allows. Reduce its scope — add a LIMIT, narrow the MATCH, or avoid large collect()/cartesian products; retrying it unchanged will not help."
+            }
             Kind::Internal => {
                 "An internal or transient error. Retry; if it persists, the query may be too expensive or malformed — revise it or report it."
             }
@@ -152,8 +158,25 @@ impl Error {
         if is_statement_error {
             return Self::new(Kind::Syntax(statement_error_detail(&e)), Some(Box::new(e)));
         }
+        // A memory/heap limit is a Transient/Database error (not a statement error),
+        // so it would otherwise be a generic "retry" 500; flag it so the hint says
+        // "shrink the query" instead. Same Neo4j-vs-wrapped split as above.
+        let is_resource_limit = match &e {
+            neo4rs::Error::Neo4j(n) => is_resource_exhaustion(n.code()),
+            neo4rs::Error::UnexpectedMessage(msg) => is_resource_exhaustion(msg),
+            _ => false,
+        };
+        if is_resource_limit {
+            return Self::new(Kind::ResourceExhausted, Some(Box::new(e)));
+        }
         Self::internal(Box::new(e))
     }
+}
+
+/// Whether a Neo4j status code (or wrapped failure text) denotes exceeding a
+/// transaction memory/heap limit — e.g. `MemoryPoolOutOfMemoryError`.
+fn is_resource_exhaustion(text: &str) -> bool {
+    text.contains("OutOfMemory") || text.contains("MemoryLimit")
 }
 
 /// The caller-facing detail for a statement error. The clean Neo4j message (about
@@ -185,6 +208,7 @@ impl std::fmt::Display for Error {
             Kind::Timeout { ms } => write!(f, "query exceeded {ms}ms timeout"),
             Kind::RateLimited => f.write_str("rate limit exceeded"),
             Kind::Syntax(detail) => f.write_str(detail),
+            Kind::ResourceExhausted => f.write_str("the query exceeded a database resource limit (e.g. memory)"),
             Kind::Internal => f.write_str("internal error"),
         }
     }
@@ -255,6 +279,21 @@ mod tests {
                 .to_owned(),
         );
         assert_eq!(Error::from_neo4rs(db_exec).code(), ErrorCode::InternalError);
+    }
+
+    #[test]
+    fn memory_limit_gets_a_shrink_the_query_hint_not_retry() {
+        // A memory-pool exhaustion (deterministic — retrying won't help) still maps to
+        // a 500, but its hint must steer the caller to shrink the query, not retry.
+        let oom = neo4rs::Error::UnexpectedMessage(
+            "unexpected response for PULL: Ok(Failure(Failure { metadata: \
+             String { value: \"Neo.TransientError.General.MemoryPoolOutOfMemoryError\" } }))"
+                .to_owned(),
+        );
+        let err = Error::from_neo4rs(oom);
+        assert_eq!(err.code(), ErrorCode::InternalError);
+        assert!(err.hint().contains("Reduce its scope"), "hint: {}", err.hint());
+        assert!(!err.hint().to_lowercase().starts_with("retry"));
     }
 
     #[test]

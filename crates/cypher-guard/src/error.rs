@@ -13,6 +13,9 @@ pub enum RejectReason {
     AdminClause,
     /// A namespaced/qualified procedure or function call (`apoc.*`, `db.*`, ...).
     NamespacedCall,
+    /// A quantified path pattern (`(...)+`, `(...)*`, `(...){n,m}`), whose
+    /// traversal cost is unbounded by the path-depth cap.
+    QuantifiedPath,
     /// A statement separator `;` (multi-statement injection).
     Semicolon,
     /// A `//` or `/* */` comment (which could hide a mutation keyword).
@@ -37,6 +40,7 @@ impl RejectReason {
             Self::Mutation => "Only read-only queries are allowed. Remove write clauses such as CREATE, MERGE, SET, DELETE, REMOVE, or DROP.",
             Self::AdminClause => "Administration and graph-selector clauses (USE, SHOW, PROFILE, EXPLAIN, ...) are not permitted.",
             Self::NamespacedCall => "Namespaced procedure/function calls (apoc.*, db.*, dbms.*, gds.*) are not permitted.",
+            Self::QuantifiedPath => "Quantified path patterns ((...)+, (...)*, (...){n,m}) are not permitted; their cost is unbounded. Use a bounded variable-length relationship instead, e.g. -[:FOLLOWS*1..5]->.",
             Self::Semicolon => "Submit a single statement; the ';' separator is not allowed.",
             Self::CommentInjection => "Comments are not permitted; remove // and /* */ from the query.",
             Self::NonReadEntry => "A query must begin with MATCH, OPTIONAL MATCH, WITH, UNWIND, or RETURN.",
@@ -54,6 +58,7 @@ impl fmt::Display for RejectReason {
             Self::Mutation => "query contains a mutating clause",
             Self::AdminClause => "query contains an administration or graph-selector clause",
             Self::NamespacedCall => "query contains a namespaced procedure/function call",
+            Self::QuantifiedPath => "query contains a quantified path pattern",
             Self::Semicolon => "query contains a statement separator ';'",
             Self::CommentInjection => "query contains a comment",
             Self::NonReadEntry => "query does not begin with a read-entry clause",
