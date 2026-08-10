@@ -215,7 +215,7 @@ impl Executor {
         params: &Map<String, Value>,
         requested_limit: Option<u32>,
     ) -> Result<QueryResponse, Error> {
-        let budget = row_budget(&self.inner.limits, requested_limit, query.result_limit());
+        let (budget, budget_source) = row_budget(&self.inner.limits, requested_limit, query.result_limit());
         let mut neo_query = Query::new(query.cypher().to_owned());
         for (key, value) in params {
             neo_query = neo_query.param(key, json_to_bolt(value)?);
@@ -244,7 +244,7 @@ impl Executor {
         };
 
         let read = read_rows(&mut stream, &mut txn, budget, byte_cap);
-        let result = match timeout(remaining(), read).await {
+        let mut result = match timeout(remaining(), read).await {
             Ok(Ok(response)) => {
                 // A read txn has nothing to commit; this releases it. A failure here is cleanup, logged not surfaced.
                 if let Err(e) = txn.commit().await {
@@ -261,6 +261,14 @@ impl Executor {
                 Err(Error::timeout(duration_ms(timeout_budget)))
             }
         };
+        // Only a truncated result had its budget bite, so that is the only time the
+        // rule behind it is worth reporting.
+        if let Ok(response) = &mut result {
+            if response.truncated {
+                response.notes.extend(budget_note(budget_source, &self.inner.limits));
+            }
+        }
+
         let elapsed = started.elapsed();
         tracing::debug!(elapsed_ms = duration_ms(elapsed), ok = result.is_ok(), "query executed");
         if elapsed >= SLOW_QUERY_THRESHOLD {
@@ -346,22 +354,62 @@ async fn rollback_quietly(txn: neo4rs::Txn) {
     }
 }
 
-/// The number of rows to read, capped at `max_result_rows`. An explicit request
-/// limit (`--limit` / HTTP `limit`) always wins; otherwise the query's own
+/// How the row budget was arrived at. Carried alongside the budget so a truncated
+/// result can say *why* it stopped: a caller who never sees the rule it hit reports
+/// the capped count as the real total.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum BudgetSource {
+    /// The caller's own limit was honored as written; `truncated` says the rest.
+    AsRequested,
+    /// Nothing asked for a limit, so the default applied.
+    Default,
+    /// The limit asked for exceeded `max_result_rows` and was cut to it.
+    Capped(u32),
+}
+
+/// The number of rows to read, capped at `max_result_rows`, and why. An explicit
+/// request limit (`--limit` / HTTP `limit`) always wins; otherwise the query's own
 /// top-level `LIMIT` is honored, so an agent's natural `... LIMIT 50` returns 50
 /// without needing a separate flag. A parameterized `LIMIT $n` reads up to the
 /// ceiling and lets the server-side `LIMIT` do the cut; no limit falls back to the
 /// default.
-fn row_budget(limits: &Limits, requested: Option<u32>, query_limit: ResultLimit) -> usize {
-    let n = match requested {
+fn row_budget(limits: &Limits, requested: Option<u32>, query_limit: ResultLimit) -> (usize, BudgetSource) {
+    let mut source = BudgetSource::AsRequested;
+    let asked = match requested {
         Some(r) => r,
         None => match query_limit {
             ResultLimit::Fixed(n) => n,
+            // `LIMIT $n` reads to the ceiling and lets the server-side LIMIT cut, so
+            // the gateway is not the one bounding it.
             ResultLimit::Dynamic => limits.max_result_rows,
-            ResultLimit::None => limits.default_limit,
+            ResultLimit::None => {
+                source = BudgetSource::Default;
+                limits.default_limit
+            }
         },
     };
-    n.min(limits.max_result_rows) as usize
+    if asked > limits.max_result_rows {
+        source = BudgetSource::Capped(asked);
+    }
+    (asked.min(limits.max_result_rows) as usize, source)
+}
+
+/// The disclosure note for a truncated result, or `None` when the caller already
+/// knows why (it got exactly the limit it asked for). Numbers come from `limits`,
+/// which is env-configurable, so they are never hardcoded into the text.
+fn budget_note(source: BudgetSource, limits: &Limits) -> Option<String> {
+    match source {
+        BudgetSource::AsRequested => None,
+        BudgetSource::Default => Some(format!(
+            "no LIMIT in the query, so the default of {} rows applied (maximum {}); \
+             add a LIMIT, or page with SKIP, to read further",
+            limits.default_limit, limits.max_result_rows
+        )),
+        BudgetSource::Capped(asked) => Some(format!(
+            "LIMIT {asked} capped to the maximum of {} rows; page with SKIP to read further",
+            limits.max_result_rows
+        )),
+    }
 }
 
 fn duration_ms(d: Duration) -> u64 {
@@ -371,6 +419,40 @@ fn duration_ms(d: Duration) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn row_budget_reports_the_rule_it_applied() {
+        let l = Limits::default(); // default_limit 25, max_result_rows 100
+        let budget = |requested, query_limit| row_budget(&l, requested, query_limit);
+
+        // No limit anywhere: the default applies and says so.
+        assert_eq!(budget(None, ResultLimit::None), (25, BudgetSource::Default));
+        // The query's own limit is honored untouched, so there is nothing to disclose.
+        assert_eq!(budget(None, ResultLimit::Fixed(50)), (50, BudgetSource::AsRequested));
+        assert_eq!(budget(Some(10), ResultLimit::None), (10, BudgetSource::AsRequested));
+        // Exactly at the ceiling is honored, not "capped".
+        assert_eq!(budget(None, ResultLimit::Fixed(100)), (100, BudgetSource::AsRequested));
+        // Over the ceiling: cut, and the original ask is kept for the note.
+        assert_eq!(budget(None, ResultLimit::Fixed(500)), (100, BudgetSource::Capped(500)));
+        assert_eq!(budget(Some(500), ResultLimit::Fixed(5)), (100, BudgetSource::Capped(500)));
+        // `LIMIT $n` reads to the ceiling; the server-side LIMIT does the cut, so the
+        // gateway must not claim it capped anything.
+        assert_eq!(budget(None, ResultLimit::Dynamic), (100, BudgetSource::AsRequested));
+    }
+
+    #[test]
+    fn budget_note_speaks_only_when_the_caller_could_be_misled() {
+        let l = Limits::default();
+        // The caller got what it asked for; `truncated` alone is the whole story.
+        assert!(budget_note(BudgetSource::AsRequested, &l).is_none());
+
+        let default = budget_note(BudgetSource::Default, &l).expect("default is worth disclosing");
+        assert!(default.contains("25") && default.contains("100"), "{default}");
+        assert!(default.contains("SKIP"), "the note must name the way past the cap: {default}");
+
+        let capped = budget_note(BudgetSource::Capped(500), &l).expect("a cap is worth disclosing");
+        assert!(capped.contains("500") && capped.contains("100"), "{capped}");
+    }
 
     #[test]
     fn loopback_uris_are_never_insecure() {
