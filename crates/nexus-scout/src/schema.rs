@@ -42,6 +42,10 @@ pub struct RelationshipSchema {
     pub from: String,
     /// The target node label.
     pub to: String,
+    /// Optional prose for a relationship whose shape is easy to misread, e.g. one
+    /// carrying data a caller would otherwise look for on a node. Omitted when absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
     /// The relationship's properties, each a bare type string.
     pub properties: serde_json::Map<String, serde_json::Value>,
 }
