@@ -181,6 +181,9 @@ impl Executor {
             .db("neo4j")
             // One batch covers the largest result (row cap is the true upper bound); +1 detects a row-cap.
             .fetch_size(config.limits.max_result_rows as usize + 1)
+            // Size the pool to the HTTP concurrency cap; otherwise neo4rs's default (16)
+            // would make admitted requests beyond 16 stall on connection acquire.
+            .max_connections(config.neo4j_max_connections)
             .build()
             // Connect failures are operational, not syntax, so map straight to Internal.
             .map_err(Error::internal)?;

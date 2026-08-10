@@ -95,6 +95,7 @@ works); exit codes: `0` ok, `1` internal/transient, `2` rejected, `3` timeout.
 | Param count/bytes/depth | 32 / 8 KiB / 8 | Denial-of-service bounds on parameters. |
 | Request body size (HTTP) | 64 KiB | Oversized request bodies rejected with `413`. |
 | In-flight concurrency (HTTP) | 64 | Excess `/v1/query` requests shed with `429` (not queued). |
+| Neo4j connection pool | 64 | Sized to the concurrency cap so admitted requests don't stall on connection acquire; production refuses to start if concurrency exceeds it. |
 | Request rate (HTTP) | 50 rps | Sustained `/v1/query` over the cap shed with `429`. |
 | Whole-request timeout (HTTP) | 30 s | Coarse backstop above the 10 s query timeout. |
 

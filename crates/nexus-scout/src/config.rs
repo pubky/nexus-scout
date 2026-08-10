@@ -161,6 +161,10 @@ pub struct Config {
     pub neo4j_user: String,
     /// The Neo4j password (redacted in logs; see [`Secret`]).
     pub neo4j_password: Secret,
+    /// Size of the Neo4j connection pool. Defaults to the HTTP concurrency cap so
+    /// admission never lets in more requests than the pool can serve; a smaller pool
+    /// makes excess admitted requests stall on connection acquire until they time out.
+    pub neo4j_max_connections: usize,
     /// Client-side liveness timeout for a query.
     pub query_timeout: Duration,
     /// Guardrail and resource limits.
@@ -184,7 +188,49 @@ impl Config {
     pub fn builder() -> ConfigBuilder {
         ConfigBuilder::default()
     }
+
+    /// Checks that the HTTP concurrency cap does not exceed the Neo4j connection
+    /// pool. When it does, admitted requests beyond the pool size stall on connection
+    /// acquire until they time out — an availability cliff under load. The production
+    /// profile fails closed on this; development only warns (the caller logs it).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error`] in [`Profile::Production`] when `HTTP_MAX_CONCURRENCY`
+    /// exceeds `NEO4J_MAX_CONNECTIONS`.
+    pub fn check_http_pool_capacity(&self) -> Result<(), Error> {
+        if self.http_limits.max_concurrency > self.neo4j_max_connections && matches!(self.profile, Profile::Production)
+        {
+            return Err(Error::bad_config(
+                "HTTP_MAX_CONCURRENCY",
+                PoolCapacityError {
+                    max_concurrency: self.http_limits.max_concurrency,
+                    max_connections: self.neo4j_max_connections,
+                },
+            ));
+        }
+        Ok(())
+    }
 }
+
+/// The HTTP concurrency cap exceeds the Neo4j connection pool.
+#[derive(Debug)]
+struct PoolCapacityError {
+    max_concurrency: usize,
+    max_connections: usize,
+}
+
+impl std::fmt::Display for PoolCapacityError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "HTTP_MAX_CONCURRENCY ({}) exceeds NEO4J_MAX_CONNECTIONS ({}); raise the pool or lower concurrency",
+            self.max_concurrency, self.max_connections
+        )
+    }
+}
+
+impl std::error::Error for PoolCapacityError {}
 
 /// The sole populator for [`Config`]. Defaults live here;
 /// [`ConfigBuilder::apply_env`] layers env vars over them. URI precedence is
@@ -198,6 +244,7 @@ impl Default for ConfigBuilder {
             neo4j_uri: "bolt://localhost:7687".to_owned(),
             neo4j_user: "neo4j".to_owned(),
             neo4j_password: Secret::new(String::new()),
+            neo4j_max_connections: HttpLimits::default().max_concurrency,
             query_timeout: Duration::from_secs(10),
             limits: Limits::default(),
             http_bind: SocketAddr::from(([127, 0, 0, 1], 8080)),
@@ -247,6 +294,7 @@ impl ConfigBuilder {
         if let Ok(v) = var("NEO4J_PASSWORD") {
             self.0.neo4j_password = Secret::new(v);
         }
+        parse_env_into("NEO4J_MAX_CONNECTIONS", &mut self.0.neo4j_max_connections)?;
         let limits = &mut self.0.limits;
         parse_env_into("DEFAULT_LIMIT", &mut limits.default_limit)?;
         parse_env_into("MAX_RESULT_ROWS", &mut limits.max_result_rows)?;
@@ -338,6 +386,27 @@ mod tests {
         assert_eq!(cfg.query_timeout, Duration::from_secs(10));
         // Assert the builder propagates cypher-guard's defaults rather than re-typing them.
         assert_eq!(cfg.limits.guard, GuardLimits::default());
+        // The Neo4j pool defaults to the HTTP concurrency cap so admission never
+        // admits more than the pool can serve.
+        assert_eq!(cfg.neo4j_max_connections, cfg.http_limits.max_concurrency);
+        assert_eq!(cfg.neo4j_max_connections, 64);
+    }
+
+    #[test]
+    fn http_pool_capacity_fails_closed_in_production_when_concurrency_exceeds_pool() {
+        let check = |profile: Profile, concurrency: usize, pool: usize| {
+            let mut cfg = Config::builder().build();
+            cfg.profile = profile;
+            cfg.http_limits.max_concurrency = concurrency;
+            cfg.neo4j_max_connections = pool;
+            cfg.check_http_pool_capacity()
+        };
+        // Concurrency above the pool: production refuses, development tolerates.
+        assert!(check(Profile::Production, 64, 16).is_err());
+        assert!(check(Profile::Development, 64, 16).is_ok());
+        // Aligned (or pool larger) is fine in either profile.
+        assert!(check(Profile::Production, 64, 64).is_ok());
+        assert!(check(Profile::Production, 32, 64).is_ok());
     }
 
     #[test]
@@ -352,6 +421,10 @@ mod tests {
                 .unwrap_or_else(|| panic!(".env.example is missing {key}"))
                 .to_owned()
         };
+        assert_eq!(
+            value_of("NEO4J_MAX_CONNECTIONS"),
+            Config::builder().build().neo4j_max_connections.to_string()
+        );
         let l = Limits::default();
         assert_eq!(value_of("DEFAULT_LIMIT"), l.default_limit.to_string());
         assert_eq!(value_of("MAX_RESULT_ROWS"), l.max_result_rows.to_string());

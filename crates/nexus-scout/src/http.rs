@@ -40,6 +40,17 @@ use crate::{BoundsOutcome, Scout, COST_BOUNDS_HINT};
 pub async fn serve_http(config: Config) -> Result<(), Error> {
     let bind = config.http_bind;
     let limits = config.http_limits;
+    // Fail closed in production (warn in development) if admission would admit more
+    // requests than the Neo4j pool can serve.
+    config.check_http_pool_capacity()?;
+    if config.http_limits.max_concurrency > config.neo4j_max_connections {
+        tracing::warn!(
+            max_concurrency = config.http_limits.max_concurrency,
+            max_connections = config.neo4j_max_connections,
+            "HTTP_MAX_CONCURRENCY exceeds NEO4J_MAX_CONNECTIONS; admitted requests beyond the pool will \
+             stall on connection acquire until they time out"
+        );
+    }
     let scout = Scout::connect(config).await?;
 
     scout.ensure_cost_bounds().await?;
