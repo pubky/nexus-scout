@@ -36,6 +36,17 @@ const REJECT: &[(&str, RejectReason)] = &[
     ("cReAtE (n) RETURN n", RejectReason::Mutation),
     ("match (n) delete n", RejectReason::Mutation),
     ("MATCH (n)\nDETACH    DELETE n", RejectReason::Mutation),
+    // --- Numeric-glue obfuscation: a write keyword fused to a preceding number must
+    //     not hide inside the numeric token (Neo4j lexes `0CREATE` as `0` then
+    //     `CREATE` and would execute the write). Found by fuzzing. ---
+    ("MATCH (a) WHERE a.x>0CREATE (n:Evil) RETURN a", RejectReason::Mutation),
+    ("MATCH (a) WHERE a.x>0SET a.pwned=1 RETURN a", RejectReason::Mutation),
+    ("MATCH (a) WHERE a.x>0DETACH DELETE a", RejectReason::Mutation),
+    ("WITH 1SET x", RejectReason::Mutation),
+    // Hex/octal literals: Neo4j lexes `0xFF` then `SET`, so a keyword fused to a hex
+    // number must not hide behind the sanitizer treating `xFFSET` as one identifier.
+    ("MATCH (a) WHERE a.n>0xFFSET a.p=1 RETURN a", RejectReason::Mutation),
+    ("MATCH (a) WHERE a.n>0o17SET a.p=1 RETURN a", RejectReason::Mutation),
     // --- Comment injection ---
     (
         "MATCH (n) RETURN n // harmless\nCREATE (x)",
@@ -107,6 +118,13 @@ const REJECT: &[(&str, RejectReason)] = &[
         "MATCH (s:User)((a)-[:FOLLOWS]->(b)){2,}(e:User) RETURN s LIMIT 5",
         RejectReason::QuantifiedPath,
     ),
+    // bare undirected `--` edge: a quantified path with no direction marker must
+    // still be caught (the `*1..5` cap only bounds legacy variable-length paths).
+    (
+        "MATCH p=((a:User)--(b:User)){1,3} RETURN count(p)",
+        RejectReason::QuantifiedPath,
+    ),
+    ("MATCH ((a)--(b))+ RETURN a LIMIT 5", RejectReason::QuantifiedPath),
     // --- Admin / selector clauses ---
     ("USE system MATCH (n) RETURN n", RejectReason::AdminClause),
     ("SHOW USERS", RejectReason::AdminClause),
@@ -160,8 +178,12 @@ const ACCEPT: &[&str] = &[
     "MATCH (n:User) RETURN n.`a``b` LIMIT 5",                                // escaped (doubled) backtick in identifier
     "MATCH (n:User) RETURN n.`DELETE``CREATE` LIMIT 5", // keywords inside a backtick escape are opaque data
     "RETURN (1 + 2) * 3 AS n",                          // parenthesized arithmetic, not a quantified path
+    "RETURN (1 - -2) * 3 AS n",                         // double-minus (subtract a negative), not an undirected edge
     "MATCH (u:User) RETURN (u.indexed_at / 1000) + 1 AS s LIMIT 5", // grouped expression then '+'
     "MATCH (a:User) WHERE (a)-[:FOLLOWS]->(:User) RETURN a.name LIMIT 5", // pattern predicate, not quantified
+    "MATCH (a:User)--(b:User) RETURN a.name LIMIT 5",   // plain undirected match (not quantified), still allowed
+    "MATCH (u:User) WHERE u.age > 0 RETURN u.name LIMIT 5", // number, space, keyword: fine
+    "RETURN 0xFF AS hex, 1.5e3 AS float, 1_000 AS sep", // hex/exponent/underscore numerics still accepted
 ];
 
 #[test]

@@ -127,14 +127,20 @@ fn find_quantified_path(sig: &[&Token], src: &str) -> Option<Range<usize>> {
     None
 }
 
-/// Whether the token at `i` marks a relationship: a `-[` detail bracket, or an `->`
-/// / `<-` arrow head (so both `-[:R]->` and bare `-->`/`<--` patterns count).
+/// Whether the token at `i` marks a relationship: a `-[` detail bracket, an `->` /
+/// `<-` arrow head (so `-[:R]->` and bare `-->`/`<--` patterns count), or a bare
+/// undirected `--` edge between node patterns.
 fn is_relationship_at(sig: &[&Token], i: usize, src: &str) -> bool {
     let prev_is = |c: u8| i > 0 && punct_is(sig[i - 1], src, c);
     let next_is = |c: u8| sig.get(i + 1).is_some_and(|t| punct_is(t, src, c));
+    let after_is = |off: usize, c: u8| sig.get(i + off).is_some_and(|t| punct_is(t, src, c));
     (punct_is(sig[i], src, b'[') && prev_is(b'-'))
         || (punct_is(sig[i], src, b'>') && prev_is(b'-'))
         || (punct_is(sig[i], src, b'<') && next_is(b'-'))
+        // Bare undirected `--` edge. The `)`-before / `(`-after node-pattern boundary
+        // distinguishes a relationship (`(a)--(b)`) from arithmetic double-minus
+        // (`a - -b`), whose dashes are flanked by operands, not node groups.
+        || (punct_is(sig[i], src, b'-') && next_is(b'-') && (prev_is(b')') || after_is(2, b'(')))
 }
 
 /// A token that can name a namespace segment. Backtick-quoted segments count, else
