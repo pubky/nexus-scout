@@ -125,8 +125,10 @@ impl Scout {
             .executor
             .execute(&sanitized, &params, requested_limit)
             .await?;
-        // Surface any transforms (e.g. a bounded variable-length path) to the caller.
-        response.notes = sanitized.notes().to_vec();
+        // Surface every transform to the caller: the sanitizer's rewrites (e.g. a
+        // bounded variable-length path) ahead of anything the executor recorded while
+        // reading rows. Prepending rather than assigning, so both survive.
+        response.notes.splice(0..0, sanitized.notes().iter().cloned());
         Ok(response)
     }
 
@@ -134,6 +136,13 @@ impl Scout {
     #[must_use]
     pub fn schema(&self) -> &'static GraphSchema {
         schema::schema()
+    }
+
+    /// Returns the per-request limits in force, so a transport can publish the
+    /// real configured bounds rather than restating the defaults.
+    #[must_use]
+    pub fn limits(&self) -> Limits {
+        self.inner.limits
     }
 
     /// Returns the names of any required server-side Neo4j cost bounds that are

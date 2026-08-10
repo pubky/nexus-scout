@@ -14,7 +14,8 @@ availability under anonymous load.
 ## Decision
 
 Add an Axum HTTP server as an additive `http` feature on `nexus-scout`, exposing `POST /v1/query`,
-`GET /v1/schema`, `GET /health`, `GET /ready`, and `GET /metrics` over the shared `Scout` core, so
+`GET /v1/schema`, `GET /`, `GET /llms.txt`, `GET /health`, `GET /ready`, and `GET /metrics` over the
+shared `Scout` core, so
 the sanitizer enforces read-only at the HTTP boundary exactly as on the CLI/MCP paths. The CLI becomes
 a separate, credential-free `scout` client crate, and the wire contract (DTOs + the `code → HTTP
 status` / `code → exit code` maps) moves to a shared `nexus-scout-types` crate so client and server

@@ -83,6 +83,8 @@ pub fn router(scout: Scout, limits: HttpLimits) -> Router {
 
     Router::new()
         .merge(query)
+        .route("/", get(index_handler))
+        .route("/llms.txt", get(llms_handler))
         .route("/v1/schema", get(schema_handler))
         .route("/health", get(health_handler))
         .route("/ready", get(ready_handler))
@@ -199,6 +201,67 @@ async fn query_handler(
 
 async fn schema_handler() -> Json<&'static GraphSchema> {
     Json(curated_schema())
+}
+
+/// The agent-facing usage guide, kept in sync by being the repo's `SKILL.md`
+/// itself rather than a second copy.
+const SKILL_DOC: &str = include_str!("../../../SKILL.md");
+
+/// Strips a leading YAML frontmatter block. The header addresses skill loaders;
+/// an HTTP caller wants the body. A document without one is served unchanged.
+fn strip_frontmatter(doc: &str) -> &str {
+    doc.strip_prefix("---\n")
+        .and_then(|rest| rest.split_once("\n---\n"))
+        .map_or(doc, |(_, body)| body.trim_start())
+}
+
+async fn llms_handler() -> &'static str {
+    strip_frontmatter(SKILL_DOC)
+}
+
+/// Service descriptor for the bare base URL. A caller that arrives knowing only
+/// the hostname has to learn the query path, the request body's field names, and
+/// the row cap before it can do anything, so all three are stated here rather
+/// than left to be discovered from 404s and deserialization errors.
+async fn index_handler(State(state): State<AppState>) -> Json<serde_json::Value> {
+    let limits = state.scout.limits();
+    Json(serde_json::json!({
+        "service": "nexus-scout",
+        "description": "Read-only Cypher gateway to the Pubky social graph.",
+        "start_here": "/llms.txt",
+        "endpoints": {
+            "POST /v1/query": "Run read-only Cypher.",
+            "GET /v1/schema": "Node labels, relationship types, and example queries.",
+            "GET /llms.txt": "Usage guide: recipes, limits, and error recovery.",
+            "GET /health": "Liveness.",
+            "GET /ready": "Readiness. A 503 here does not stop /v1/query from serving queries.",
+        },
+        "example_request": {
+            "method": "POST",
+            "path": "/v1/query",
+            "headers": { "content-type": "application/json" },
+            "body": {
+                "cypher": "MATCH (u:User)<-[f:FOLLOWS]-() RETURN u.name AS name, count(f) AS followers ORDER BY followers DESC LIMIT 10",
+                "params": {},
+            },
+        },
+        "limits": {
+            "default_limit": limits.default_limit,
+            "max_result_rows": limits.max_result_rows,
+            "max_path_depth": limits.guard.max_path_depth,
+            "max_body_bytes": state.limits.max_body_bytes,
+        },
+        "notes": [
+            format!(
+                "A query with no LIMIT returns {} rows; the ceiling is {}. Page past the ceiling with \
+                 SKIP/LIMIT and reconcile the total against a count() query.",
+                limits.default_limit, limits.max_result_rows
+            ),
+            "Read-only: writes, CALL, and admin clauses are rejected. Errors carry a machine-readable \
+             code plus a hint describing the fix."
+                .to_owned(),
+        ],
+    }))
 }
 
 /// Liveness: the process is up. No database check (that is what readiness is for).
@@ -345,6 +408,28 @@ async fn shutdown_signal() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn llms_txt_serves_the_skill_body_without_its_frontmatter() {
+        let served = strip_frontmatter(SKILL_DOC);
+        // The YAML header addresses skill loaders, not HTTP callers.
+        assert!(!served.starts_with("---"), "frontmatter leaked: {:?}", &served[..40]);
+        assert!(!served.contains("\nname: nexus-scout\n"), "frontmatter leaked");
+        assert!(served.starts_with('#'), "body should open on a heading: {:?}", &served[..40]);
+
+        // The three facts a caller cannot get anywhere else: the base URL, the query
+        // endpoint, and the request body's field name.
+        assert!(served.contains("https://nexus-scout.pubky.org"));
+        assert!(served.contains("/v1/query"));
+        assert!(served.contains("\"cypher\""));
+    }
+
+    #[test]
+    fn strip_frontmatter_leaves_a_plain_document_alone() {
+        assert_eq!(strip_frontmatter("# Title\n\nbody\n"), "# Title\n\nbody\n");
+        // An unterminated header is not frontmatter; serve it rather than eat the file.
+        assert_eq!(strip_frontmatter("---\nname: x\n"), "---\nname: x\n");
+    }
 
     #[test]
     fn api_error_maps_each_code_to_its_status() {

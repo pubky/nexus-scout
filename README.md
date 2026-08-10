@@ -38,8 +38,12 @@ nexus-scout serve --transport stdio
 
 ## HTTP API
 
+The public instance is `https://nexus-scout.pubky.org`. No account or API key.
+
 | Method + path | Purpose |
 |---------------|---------|
+| `GET /` | Service descriptor: endpoints, an example request, and the live limits. |
+| `GET /llms.txt` | Usage guide for agents (`SKILL.md`, served verbatim). |
 | `POST /v1/query` | Run a read-only query: body `{ "cypher": ..., "params"?: {…}, "limit"?: n }`. |
 | `GET /v1/schema` | The curated graph schema. |
 | `GET /health` | Liveness (process up). |
