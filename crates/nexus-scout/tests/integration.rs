@@ -180,6 +180,40 @@ async fn bounded_path_is_surfaced_in_notes() {
     );
 }
 
+/// A sanitizer note and an executor note must both survive onto one response. They
+/// are produced in different crates and merged in `Scout::run`, which used to
+/// *assign* the sanitizer's notes over whatever the executor had recorded, silently
+/// dropping the row-limit disclosure whenever a query also triggered a rewrite.
+#[tokio::test]
+async fn sanitizer_and_row_limit_notes_coexist() {
+    let admin = admin_graph().await;
+    seed(&admin).await;
+
+    let scout = gateway().await;
+    // Bounded path (sanitizer note) and no LIMIT over more rows than the default
+    // (executor note), in one query.
+    let resp = scout
+        .query(
+            "MATCH (a:User)-[:FOLLOWS*1..10]->(b:User) UNWIND range(1,100) AS i RETURN b.id AS id, i",
+            Map::new(),
+            None,
+        )
+        .await
+        .expect("query succeeds");
+
+    assert!(resp.truncated, "expected the default row budget to bite: {resp:?}");
+    assert!(
+        resp.notes.iter().any(|n| n.contains("bounded to '*1..5'")),
+        "sanitizer note missing: {:?}",
+        resp.notes
+    );
+    assert!(
+        resp.notes.iter().any(|n| n.contains("no LIMIT in the query")),
+        "row-limit note missing: {:?}",
+        resp.notes
+    );
+}
+
 /// F1: a whole-node return is properties-only, with no synthetic `_id`/`_labels`
 /// leaked into the row.
 #[tokio::test]
