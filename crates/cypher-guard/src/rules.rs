@@ -9,7 +9,7 @@ use std::ops::Range;
 use crate::error::{RejectReason, SanitizeError};
 use crate::tokenizer::{Token, TokenKind};
 
-/// Graph-mutating clauses plus the procedure-call keyword. Rejected anywhere.
+/// Graph-mutating clauses. Rejected anywhere.
 ///
 /// Because the gateway runs against Neo4j Community (no RBAC, so no read-only DB
 /// user), the sanitizer is the *sole* write guard, so this list errs toward
@@ -17,8 +17,14 @@ use crate::tokenizer::{Token, TokenKind};
 #[rustfmt::skip]
 pub(crate) const DENY_MUTATION: &[&str] = &[
     "CREATE", "MERGE", "SET", "DELETE", "DETACH", "NODETACH", "REMOVE", "DROP",
-    "INSERT", "FOREACH", "LOAD", "CALL", "USING",
+    "INSERT", "FOREACH", "LOAD", "USING",
 ];
+
+/// The procedure-call keyword, denied on its own terms. It is not a mutation: a
+/// `CALL db.labels()` writes nothing, and reporting it as one tells the caller to
+/// remove write clauses that do not exist. Kept a table of its own so
+/// [`denied_keywords`] still yields it for the property test and the fuzz oracle.
+pub(crate) const DENY_CALL: &[&str] = &["CALL"];
 
 /// Administration and graph-selector clauses. Rejected anywhere.
 #[rustfmt::skip]
@@ -30,9 +36,11 @@ pub(crate) const DENY_ADMIN: &[&str] = &[
 /// Keywords that may legally begin a read-only query.
 const READ_ENTRY: &[&str] = &["MATCH", "OPTIONAL", "WITH", "UNWIND", "RETURN"];
 
-/// The full set of denied keywords (mutation + administration), as one list.
+/// The full set of denied keywords (mutation + `CALL` + administration), as one
+/// list. Every deny table must be chained in here: it is the independent oracle
+/// the property test and the fuzzer scan accepted output against.
 pub(crate) fn denied_keywords() -> Vec<&'static str> {
-    DENY_MUTATION.iter().chain(DENY_ADMIN).copied().collect()
+    DENY_MUTATION.iter().chain(DENY_CALL).chain(DENY_ADMIN).copied().collect()
 }
 
 fn in_table(word: &str, table: &[&str]) -> bool {
@@ -71,6 +79,12 @@ pub(crate) fn classify(tokens: &[Token], src: &str) -> Result<(), SanitizeError>
         let word = t.text(src);
         if in_table(word, DENY_MUTATION) {
             return Err(SanitizeError::new(RejectReason::Mutation, Some(t.start..t.end)));
+        }
+        // Before the mutation check would have caught it via `CALL`: a `CALL { }`
+        // wrapping a write still reports the CALL, because removing the CALL is the
+        // fix either way and scan order should not decide the message.
+        if in_table(word, DENY_CALL) {
+            return Err(SanitizeError::new(RejectReason::CallClause, Some(t.start..t.end)));
         }
         if in_table(word, DENY_ADMIN) {
             return Err(SanitizeError::new(RejectReason::AdminClause, Some(t.start..t.end)));

@@ -11,6 +11,11 @@ pub enum RejectReason {
     Mutation,
     /// An administration or graph-selector clause (`USE`, `SHOW`, `PROFILE`, ...).
     AdminClause,
+    /// A `CALL`, in any form: a stored procedure or a `CALL { }` subquery. Denied
+    /// wholesale rather than as a mutation, because a read-only `CALL db.labels()`
+    /// contains nothing mutating and blaming writes sends the caller hunting for a
+    /// clause that is not there.
+    CallClause,
     /// A namespaced/qualified procedure or function call (`apoc.*`, `db.*`, ...).
     NamespacedCall,
     /// A quantified path pattern (`(...)+`, `(...)*`, `(...){n,m}`), whose
@@ -39,6 +44,7 @@ impl RejectReason {
         match self {
             Self::Mutation => "Only read-only queries are allowed. Remove write clauses such as CREATE, MERGE, SET, DELETE, REMOVE, or DROP.",
             Self::AdminClause => "Administration and graph-selector clauses (USE, SHOW, PROFILE, EXPLAIN, ...) are not permitted.",
+            Self::CallClause => "CALL is not permitted in any form, neither stored procedures (CALL db.labels()) nor CALL { } subqueries. Built-in functions need no CALL and are allowed, e.g. count(), collect(), labels(), shortestPath().",
             Self::NamespacedCall => "Namespaced procedure/function calls (apoc.*, db.*, dbms.*, gds.*) are not permitted.",
             Self::QuantifiedPath => "Quantified path patterns ((...)+, (...)*, (...){n,m}) are not permitted; their cost is unbounded. Use a bounded variable-length relationship instead, e.g. -[:FOLLOWS*1..5]->.",
             Self::Semicolon => "Submit a single statement; the ';' separator is not allowed.",
@@ -57,6 +63,7 @@ impl fmt::Display for RejectReason {
         let s = match self {
             Self::Mutation => "query contains a mutating clause",
             Self::AdminClause => "query contains an administration or graph-selector clause",
+            Self::CallClause => "query contains a CALL clause",
             Self::NamespacedCall => "query contains a namespaced procedure/function call",
             Self::QuantifiedPath => "query contains a quantified path pattern",
             Self::Semicolon => "query contains a statement separator ';'",

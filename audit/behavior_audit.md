@@ -77,11 +77,14 @@ ranges; QPP depth is unbounded by the sanitizer. This is the documented accepted
 now empirically confirmed reachable, and compounded by **B7** (no server-side bound on staging),
 leaving only the 12s client timeout as the backstop.
 
-### B6 — `CALL` rejected as "mutating clause" — **DEFERRED (cosmetic)**
-`CALL db.labels()` is correctly rejected, but the reason is "query contains a mutating clause"
-(CALL sits in `DENY_MUTATION`). Misleading for a read procedure. Fixing the reason text means a new
-`RejectReason` variant + touching the security-core deny table + tests, for cosmetic value —
-deferred.
+### B6 — `CALL` rejected as "mutating clause" — **RESOLVED**
+`CALL db.labels()` was rejected with "query contains a mutating clause" and a hint to remove
+CREATE/MERGE/SET, because CALL sat in `DENY_MUTATION`. Originally deferred as cosmetic. That
+assessment was wrong: the hint is not merely imprecise, it is actionable in the wrong direction. Six
+clean-context agent runs showed the failure mode, an agent re-reading its own query for a write
+clause that does not exist and looping. Fixed with a `RejectReason::CallClause` variant and a
+`DENY_CALL` table, still chained into `denied_keywords()` so the property test and fuzz oracle keep
+covering it.
 
 ### B7 — staging has no server-side cost bounds — **OPS**
 `/ready`=503 and a startup error: `db.transaction.timeout` / `db.memory.transaction.max` unset.

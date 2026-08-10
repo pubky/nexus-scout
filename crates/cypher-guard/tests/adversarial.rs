@@ -31,7 +31,10 @@ const REJECT: &[(&str, RejectReason)] = &[
     ("INSERT (m:Evil) RETURN m", RejectReason::Mutation),
     ("MATCH (n) WITH n CREATE (m) RETURN m", RejectReason::Mutation),
     ("MATCH (n) NODETACH DELETE n", RejectReason::Mutation),
-    ("MATCH (n) CALL { CREATE (m) } RETURN n", RejectReason::Mutation),
+    // Holds both CALL and CREATE, CALL first. Reported as the CALL on purpose:
+    // removing the CALL is the fix either way, so scan order does not pick the
+    // message. Still rejected, which is what matters.
+    ("MATCH (n) CALL { CREATE (m) } RETURN n", RejectReason::CallClause),
     // --- Case / spacing obfuscation ---
     ("cReAtE (n) RETURN n", RejectReason::Mutation),
     ("match (n) delete n", RejectReason::Mutation),
@@ -65,10 +68,13 @@ const REJECT: &[(&str, RejectReason)] = &[
         RejectReason::Unterminated,
     ),
     // --- Stored procedures / apoc / gds / namespaced functions ---
-    ("CALL db.labels() YIELD label RETURN label", RejectReason::Mutation),
+    // A read-only procedure contains nothing mutating, so it must not be blamed on
+    // writes; the caller would go looking for a clause that is not there.
+    ("CALL db.labels() YIELD label RETURN label", RejectReason::CallClause),
+    ("CALL { MATCH (n) RETURN n }", RejectReason::CallClause),
     (
         "CALL apoc.periodic.iterate('MATCH (n)','DELETE n',{}) YIELD batches RETURN batches",
-        RejectReason::Mutation,
+        RejectReason::CallClause,
     ),
     ("MATCH (n) RETURN apoc.convert.toJson(n)", RejectReason::NamespacedCall),
     ("MATCH (n) RETURN gds.util.asNode(0)", RejectReason::NamespacedCall),
@@ -227,7 +233,10 @@ fn every_denied_keyword_is_enforced() {
         match s.sanitize(&q) {
             Ok(_) => panic!("denied keyword {kw:?} was accepted"),
             Err(e) => assert!(
-                matches!(e.reason(), RejectReason::Mutation | RejectReason::AdminClause),
+                matches!(
+                    e.reason(),
+                    RejectReason::Mutation | RejectReason::CallClause | RejectReason::AdminClause
+                ),
                 "denied keyword {kw:?} rejected for the wrong reason: {:?}",
                 e.reason()
             ),

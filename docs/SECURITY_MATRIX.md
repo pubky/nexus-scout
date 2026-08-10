@@ -72,7 +72,18 @@ All rejected wherever they appear, not only at statement start. Source:
 | `FOREACH` | `FOREACH (x IN [1] \| SET x.y = 1)` | `adversarial.rs` |
 | `LOAD` (`LOAD CSV`) | `LOAD CSV FROM 'file:///x' AS r ...` | `adversarial.rs` |
 | `USING` (`USING PERIODIC COMMIT`, query hints) | `USING PERIODIC COMMIT 500 LOAD CSV ...` | `adversarial.rs`. NOTE: query hints `USING INDEX/SCAN/JOIN` are also rejected (safe over-rejection) |
-| `CALL` (procedure call *and* `CALL { }` subquery, incl. `IN TRANSACTIONS`) | `CALL db.labels() ...`, `MATCH (n) CALL { CREATE (m) }` | `adversarial.rs`. NOTE: read-only `CALL { }` subqueries are also rejected (safe over-rejection) |
+
+## Procedure-call clause (denied)
+
+Source: `DENY_CALL` in `rules.rs`. Reason code: `CallClause`.
+
+`CALL` is denied on its own terms rather than as a write. A read-only
+`CALL db.labels()` mutates nothing, so reporting it as a mutating clause sent
+callers hunting for a write clause that was not there.
+
+| Clause | Example | Proven by |
+|--------|---------|-----------|
+| `CALL` (procedure call *and* `CALL { }` subquery, incl. `IN TRANSACTIONS`) | `CALL db.labels() ...`, `MATCH (n) CALL { CREATE (m) }` | `adversarial.rs`. NOTE: read-only `CALL { }` subqueries are also rejected (safe over-rejection). A `CALL { }` wrapping a write reports `CallClause`, not `Mutation`: removing the `CALL` is the fix either way, so scan order does not pick the message |
 
 ## Administration / selector clauses (denied)
 
@@ -101,7 +112,7 @@ DDL such as `CREATE INDEX/CONSTRAINT/USER/ROLE/DATABASE` and
 |-----------|--------|-------------|-----------|
 | Namespaced call `ns.fn(...)`, `ns.sub.fn(...)` (`apoc.*`, `db.*`, `dbms.*`, `gds.*`) | Deny (`NamespacedCall`) | `find_namespaced_call`: `Word ('.' Word)+ '('`, whitespace-insensitive across dots | `adversarial.rs` (incl. `apoc . convert . toJson`, newline-between-dots) |
 | Backtick-quoted namespace segment (Neo4j resolves a backtick segment, so `apoc` + backtick-`cypher` + `.runFirstColumn(...)` is still a namespaced call) | Deny (`NamespacedCall`) | backtick idents count as name segments (`is_name_segment`) | `adversarial.rs` (the original backtick bypass this closes) |
-| `CALL ns.proc(...)` | Deny (`Mutation`, via `CALL`) | `DENY_MUTATION` | `adversarial.rs` |
+| `CALL ns.proc(...)` | Deny (`CallClause`, via `CALL`) | `DENY_CALL` | `adversarial.rs` |
 
 A *bare* `ident(` call (e.g. `count(`) is allowed: no bare Cypher function
 mutates; mutation needs a clause or a namespaced procedure, both denied. An
@@ -153,8 +164,10 @@ mistaken for guarantees.
 
 - [ ] Read the target release's Cypher changelog for new clauses, especially
       write-capable (`CREATE`-like), administration, and import/load clauses.
-- [ ] Add any new write/admin clause to `DENY_MUTATION` / `DENY_ADMIN`; the
-      `every_denied_keyword_is_enforced` test then proves it is enforced.
+- [ ] Add any new write/admin clause to `DENY_MUTATION` / `DENY_CALL` / `DENY_ADMIN`;
+      the `every_denied_keyword_is_enforced` test then proves it is enforced. Every
+      deny table must be chained into `denied_keywords()`, which is the oracle the
+      property test and the fuzzer scan accepted output against.
 - [ ] Add a hand-written `adversarial.rs` REJECT case for each new clause with its
       expected reason.
 - [ ] Confirm no new read clause is wrongly rejected: add it to `READ_ENTRY` if it
