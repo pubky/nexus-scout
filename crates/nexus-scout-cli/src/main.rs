@@ -70,12 +70,18 @@ fn main() -> ExitCode {
     ExitCode::from(code)
 }
 
+/// The public gateway. Defaulting here rather than to localhost means the CLI
+/// works on a fresh machine with no configuration; the gateway is read-only and
+/// unauthenticated, so reaching it by accident costs nothing. Point at a local
+/// server with `--server-url` or `NEXUS_SCOUT_URL`.
+pub(crate) const DEFAULT_SERVER_URL: &str = "https://nexus-scout.pubky.org";
+
 /// Resolves the gateway base URL: `--server-url` > `NEXUS_SCOUT_URL` >
-/// `http://localhost:8080`.
+/// [`DEFAULT_SERVER_URL`].
 fn resolve_url(flag: Option<String>) -> String {
     let url = flag
         .or_else(|| std::env::var("NEXUS_SCOUT_URL").ok())
-        .unwrap_or_else(|| "http://localhost:8080".to_owned());
+        .unwrap_or_else(|| DEFAULT_SERVER_URL.to_owned());
     url.trim_end_matches('/').to_owned()
 }
 
@@ -135,26 +141,29 @@ fn run_query(
             )
         }
     };
+    let url = format!("{base}/v1/query");
     let result = agent
-        .post(&format!("{base}/v1/query"))
+        .post(&url)
         .set("content-type", "application/json")
         .send_string(&body);
-    handle(result)
+    handle(result, &url)
 }
 
 fn run_get(agent: &ureq::Agent, url: &str) -> (String, u8) {
-    handle(agent.get(url).call())
+    handle(agent.get(url).call(), url)
 }
 
 /// Turns a `ureq` outcome into `(stdout JSON, exit code)`, always valid JSON on stdout.
-fn handle(result: Result<ureq::Response, ureq::Error>) -> (String, u8) {
+/// A transport failure names `url`, because the resolved gateway is the thing the
+/// caller most often got wrong and cannot otherwise see.
+fn handle(result: Result<ureq::Response, ureq::Error>, url: &str) -> (String, u8) {
     match result {
         Ok(response) => from_response(response.status(), response),
         Err(ureq::Error::Status(status, response)) => from_response(status, response),
         Err(ureq::Error::Transport(transport)) => (
             envelope(
                 ErrorCode::InternalError,
-                &format!("could not reach the gateway: {transport}"),
+                &format!("could not reach the gateway at {url}: {transport}"),
             ),
             1,
         ),
@@ -210,7 +219,7 @@ fn pretty(value: &Value) -> String {
 fn envelope(code: ErrorCode, message: &str) -> String {
     let hint = match code {
         ErrorCode::QueryRejected => "Check the request: parameters must be key=value or valid JSON.",
-        _ => "Retry; if it persists, check --server-url / NEXUS_SCOUT_URL and that the gateway is running.",
+        _ => "Retry; if it persists, check the gateway URL named in the message (set --server-url or NEXUS_SCOUT_URL to change it).",
     };
     let response = ErrorResponse::new(code, message, hint);
     serde_json::to_string_pretty(&response).unwrap_or_else(|_| format!("{{\"error\":\"{code}\"}}"))
@@ -225,7 +234,10 @@ mod tests {
     fn resolve_url_precedence_and_trailing_slash() {
         assert_eq!(resolve_url(Some("http://x:9/".to_owned())), "http://x:9");
         std::env::remove_var("NEXUS_SCOUT_URL");
-        assert_eq!(resolve_url(None), "http://localhost:8080");
+        // With nothing configured the CLI must reach the public gateway, so it
+        // works on a fresh machine with no setup.
+        assert_eq!(resolve_url(None), DEFAULT_SERVER_URL);
+        assert_eq!(DEFAULT_SERVER_URL, "https://nexus-scout.pubky.org");
     }
 
     #[test]
