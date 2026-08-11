@@ -2,6 +2,17 @@
 
 use serde_json::{Map, Value};
 
+/// Which cap stopped the read. Both set `truncated`, but they need opposite advice:
+/// paging fixes a row-budget cut, while a byte-cap cut means the rows themselves are
+/// too big and paging will return the same nothing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Truncation {
+    /// The row budget was reached.
+    RowBudget,
+    /// A row would have pushed the payload past `max_result_bytes`.
+    ByteCap,
+}
+
 /// Accumulates shaped rows under a row budget and a byte cap. [`RowShaper::push`]
 /// returns `false` once no further rows should be read. The executor should read
 /// up to `budget + 1` so a row-cap truncation can be detected.
@@ -10,7 +21,7 @@ pub(crate) struct RowShaper {
     budget: usize,
     byte_cap: usize,
     bytes: usize,
-    truncated: bool,
+    truncated: Option<Truncation>,
 }
 
 impl RowShaper {
@@ -20,7 +31,7 @@ impl RowShaper {
             budget,
             byte_cap,
             bytes: 0,
-            truncated: false,
+            truncated: None,
         }
     }
 
@@ -28,14 +39,14 @@ impl RowShaper {
     /// shaper is full (the caller should stop reading).
     pub(crate) fn push(&mut self, row: Map<String, Value>) -> bool {
         if self.rows.len() >= self.budget {
-            self.truncated = true;
+            self.truncated = Some(Truncation::RowBudget);
             return false;
         }
         let row_bytes = crate::params::serialized_len(&row);
         // saturating: serialized_len returns usize::MAX on its (unreachable) failure path; must not overflow.
         if self.bytes.saturating_add(row_bytes) > self.byte_cap {
             // A row that would push the summed payload bytes over the cap is dropped, even if it is the first row.
-            self.truncated = true;
+            self.truncated = Some(Truncation::ByteCap);
             return false;
         }
         self.bytes += row_bytes;
@@ -43,8 +54,8 @@ impl RowShaper {
         true
     }
 
-    /// Consumes the shaper, returning the rows and whether the result truncated.
-    pub(crate) fn finish(self) -> (Vec<Map<String, Value>>, bool) {
+    /// Consumes the shaper, returning the rows and which cap (if any) stopped it.
+    pub(crate) fn finish(self) -> (Vec<Map<String, Value>>, Option<Truncation>) {
         (self.rows, self.truncated)
     }
 }
@@ -60,7 +71,7 @@ mod tests {
         m
     }
 
-    fn drain(mut shaper: RowShaper, count: i64) -> (Vec<Map<String, Value>>, bool) {
+    fn drain(mut shaper: RowShaper, count: i64) -> (Vec<Map<String, Value>>, Option<Truncation>) {
         for i in 0..count {
             if !shaper.push(row(i)) {
                 break;
@@ -73,28 +84,30 @@ mod tests {
     fn under_budget_keeps_all_rows() {
         let (rows, truncated) = drain(RowShaper::new(10, 1 << 20), 3);
         assert_eq!(rows.len(), 3);
-        assert!(!truncated);
+        assert_eq!(truncated, None);
     }
 
     #[test]
     fn over_budget_truncates_at_budget() {
         let (rows, truncated) = drain(RowShaper::new(2, 1 << 20), 3);
         assert_eq!(rows.len(), 2);
-        assert!(truncated);
+        assert_eq!(truncated, Some(Truncation::RowBudget));
     }
 
     #[test]
     fn byte_cap_truncates_on_multi_row_accumulation() {
+        // Reported as the byte cap, not the row budget: the caller's fix is narrower
+        // columns, and paging would hand back the same dropped rows.
         let (rows, truncated) = drain(RowShaper::new(100, 10), 3);
         assert_eq!(rows.len(), 1);
-        assert!(truncated);
+        assert_eq!(truncated, Some(Truncation::ByteCap));
     }
 
     #[test]
     fn lone_oversized_row_is_dropped_and_flagged_truncated() {
         let (rows, truncated) = drain(RowShaper::new(100, 1), 1);
         assert!(rows.is_empty(), "the oversized row must not be returned");
-        assert!(truncated, "and it is flagged truncated");
+        assert_eq!(truncated, Some(Truncation::ByteCap), "and it names the byte cap");
     }
 
     #[test]
@@ -107,12 +120,14 @@ mod tests {
             n += 1;
         }
         let (rows, truncated) = shaper.finish();
-        assert!(truncated, "the byte cap should engage");
+        assert_eq!(truncated, Some(Truncation::ByteCap), "the byte cap should engage");
         // The summed row payloads stay within the cap, but the full serialized
         // response (envelope + commas) can exceed it.
         let payload: usize = rows.iter().map(crate::params::serialized_len).sum();
         assert!(payload <= cap, "row payload sum {payload} must be within the cap {cap}");
-        let response_len = serde_json::to_vec(&QueryResponse::new(rows, truncated)).unwrap().len();
+        let response_len = serde_json::to_vec(&QueryResponse::new(rows, truncated.is_some()))
+            .unwrap()
+            .len();
         assert!(
             response_len > cap,
             "the response envelope pushes the size ({response_len}) past the cap ({cap})"
@@ -123,6 +138,6 @@ mod tests {
     fn exact_budget_is_not_truncated() {
         let (rows, truncated) = drain(RowShaper::new(3, 1 << 20), 3);
         assert_eq!(rows.len(), 3);
-        assert!(!truncated);
+        assert_eq!(truncated, None);
     }
 }

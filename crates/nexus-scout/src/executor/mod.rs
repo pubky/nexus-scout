@@ -21,7 +21,7 @@ use crate::error::Error;
 use crate::response::QueryResponse;
 use cypher_guard::{ResultLimit, SanitizedQuery};
 
-use shape::RowShaper;
+use shape::{RowShaper, Truncation};
 
 /// A query slower than this is logged at `WARN` (with a fingerprint, never the
 /// text) so abuse can be triaged without logging user content.
@@ -244,12 +244,17 @@ impl Executor {
         };
 
         let read = read_rows(&mut stream, &mut txn, budget, byte_cap);
-        let mut result = match timeout(remaining(), read).await {
-            Ok(Ok(response)) => {
+        let result = match timeout(remaining(), read).await {
+            Ok(Ok((mut response, truncation))) => {
                 // A read txn has nothing to commit; this releases it. A failure here is cleanup, logged not surfaced.
                 if let Err(e) = txn.commit().await {
                     tracing::warn!(error = %e, "read transaction commit/release failed; connection returned to pool on drop");
                 }
+                // Name the cap that actually fired. Blaming the row budget for a
+                // byte-cap cut sends the caller paging for rows that will never come.
+                response
+                    .notes
+                    .extend(truncation_note(truncation, budget_source, &self.inner.limits));
                 Ok(response)
             }
             Ok(Err(e)) => {
@@ -261,14 +266,6 @@ impl Executor {
                 Err(Error::timeout(duration_ms(timeout_budget)))
             }
         };
-        // Only a truncated result had its budget bite, so that is the only time the
-        // rule behind it is worth reporting.
-        if let Ok(response) = &mut result {
-            if response.truncated {
-                response.notes.extend(budget_note(budget_source, &self.inner.limits));
-            }
-        }
-
         let elapsed = started.elapsed();
         tracing::debug!(elapsed_ms = duration_ms(elapsed), ok = result.is_ok(), "query executed");
         if elapsed >= SLOW_QUERY_THRESHOLD {
@@ -332,7 +329,7 @@ async fn read_rows(
     txn: &mut neo4rs::Txn,
     budget: usize,
     byte_cap: usize,
-) -> Result<QueryResponse, Error> {
+) -> Result<(QueryResponse, Option<Truncation>), Error> {
     let mut shaper = RowShaper::new(budget, byte_cap);
     while let Some(row) = stream.next(txn.handle()).await.map_err(Error::from_neo4rs)? {
         let json = row_to_json(&row);
@@ -341,7 +338,7 @@ async fn read_rows(
         }
     }
     let (rows, truncated) = shaper.finish();
-    Ok(QueryResponse::new(rows, truncated))
+    Ok((QueryResponse::new(rows, truncated.is_some()), truncated))
 }
 
 async fn rollback_quietly(txn: neo4rs::Txn) {
@@ -365,6 +362,9 @@ pub(crate) enum BudgetSource {
     Default,
     /// The limit asked for exceeded `max_result_rows` and was cut to it.
     Capped(u32),
+    /// `LIMIT $n`, whose value is bound at execution and unknown here. The read runs
+    /// to the ceiling; if the ceiling stops it, the gateway did the cutting.
+    Ceiling,
 }
 
 /// The number of rows to read, capped at `max_result_rows`, and why. An explicit
@@ -374,41 +374,55 @@ pub(crate) enum BudgetSource {
 /// ceiling and lets the server-side `LIMIT` do the cut; no limit falls back to the
 /// default.
 fn row_budget(limits: &Limits, requested: Option<u32>, query_limit: ResultLimit) -> (usize, BudgetSource) {
-    let mut source = BudgetSource::AsRequested;
-    let asked = match requested {
-        Some(r) => r,
+    let (asked, source) = match requested {
+        Some(r) => (r, BudgetSource::AsRequested),
         None => match query_limit {
-            ResultLimit::Fixed(n) => n,
-            // `LIMIT $n` reads to the ceiling and lets the server-side LIMIT cut, so
-            // the gateway is not the one bounding it.
-            ResultLimit::Dynamic => limits.max_result_rows,
-            ResultLimit::None => {
-                source = BudgetSource::Default;
-                limits.default_limit
-            }
+            ResultLimit::Fixed(n) => (n, BudgetSource::AsRequested),
+            ResultLimit::Dynamic => (limits.max_result_rows, BudgetSource::Ceiling),
+            ResultLimit::None => (limits.default_limit, BudgetSource::Default),
         },
     };
-    if asked > limits.max_result_rows {
-        source = BudgetSource::Capped(asked);
-    }
+    // An over-large ask from the caller is a cap worth naming. A `default_limit`
+    // misconfigured above the ceiling is not the caller's doing, so that case keeps
+    // reporting "no LIMIT" rather than quoting a limit they never wrote.
+    let source = if asked > limits.max_result_rows && matches!(source, BudgetSource::AsRequested) {
+        BudgetSource::Capped(asked)
+    } else {
+        source
+    };
     (asked.min(limits.max_result_rows) as usize, source)
 }
 
-/// The disclosure note for a truncated result, or `None` when the caller already
-/// knows why (it got exactly the limit it asked for). Numbers come from `limits`,
-/// which is env-configurable, so they are never hardcoded into the text.
-fn budget_note(source: BudgetSource, limits: &Limits) -> Option<String> {
-    match source {
-        BudgetSource::AsRequested => None,
-        BudgetSource::Default => Some(format!(
-            "no LIMIT in the query, so the default of {} rows applied (maximum {}); \
-             add a LIMIT, or page with SKIP, to read further",
-            limits.default_limit, limits.max_result_rows
+/// The disclosure note for a cut result, or `None` when nothing was cut or the
+/// caller already knows why (it got exactly the limit it asked for). Numbers come
+/// from `limits`, which is env-configurable, so they are never hardcoded.
+fn truncation_note(truncation: Option<Truncation>, source: BudgetSource, limits: &Limits) -> Option<String> {
+    match truncation? {
+        // Paging is the wrong advice here: the rows themselves are too big, so the
+        // next page is cut the same way. Narrowing the RETURN is the fix.
+        Truncation::ByteCap => Some(format!(
+            "result payload reached the {} KiB cap, so the remaining rows were dropped; \
+             return fewer or smaller columns rather than paging",
+            limits.max_result_bytes / 1024
         )),
-        BudgetSource::Capped(asked) => Some(format!(
-            "LIMIT {asked} capped to the maximum of {} rows; page with SKIP to read further",
-            limits.max_result_rows
-        )),
+        Truncation::RowBudget => match source {
+            BudgetSource::AsRequested => None,
+            BudgetSource::Default => Some(format!(
+                "no LIMIT in the query, so the default of {} rows applied (maximum {}); \
+                 add a LIMIT, or page with SKIP, to read further",
+                limits.default_limit, limits.max_result_rows
+            )),
+            BudgetSource::Capped(asked) => Some(format!(
+                "the requested limit of {asked} was capped to the maximum of {} rows; \
+                 page with SKIP to read further",
+                limits.max_result_rows
+            )),
+            BudgetSource::Ceiling => Some(format!(
+                "the parameterized LIMIT exceeded the maximum of {} rows and was capped; \
+                 page with SKIP to read further",
+                limits.max_result_rows
+            )),
+        },
     }
 }
 
@@ -438,26 +452,52 @@ mod tests {
             budget(Some(500), ResultLimit::Fixed(5)),
             (100, BudgetSource::Capped(500))
         );
-        // `LIMIT $n` reads to the ceiling; the server-side LIMIT does the cut, so the
-        // gateway must not claim it capped anything.
-        assert_eq!(budget(None, ResultLimit::Dynamic), (100, BudgetSource::AsRequested));
+        // `LIMIT $n` reads to the ceiling. Its value is unknown here, so the source
+        // records that the ceiling is what bounds the read.
+        assert_eq!(budget(None, ResultLimit::Dynamic), (100, BudgetSource::Ceiling));
+
+        // A default misconfigured above the ceiling is not the caller's doing: it
+        // still reports "no LIMIT" rather than quoting a limit they never wrote.
+        let misconfigured = Limits {
+            default_limit: 500,
+            max_result_rows: 100,
+            ..Limits::default()
+        };
+        assert_eq!(
+            row_budget(&misconfigured, None, ResultLimit::None),
+            (100, BudgetSource::Default)
+        );
     }
 
     #[test]
-    fn budget_note_speaks_only_when_the_caller_could_be_misled() {
+    fn truncation_note_names_the_cap_that_actually_fired() {
         let l = Limits::default();
-        // The caller got what it asked for; `truncated` alone is the whole story.
-        assert!(budget_note(BudgetSource::AsRequested, &l).is_none());
+        let note = |t, s| truncation_note(t, s, &l);
 
-        let default = budget_note(BudgetSource::Default, &l).expect("default is worth disclosing");
+        // Nothing was cut: nothing to say, whatever the budget rule was.
+        assert!(note(None, BudgetSource::Default).is_none());
+        assert!(note(None, BudgetSource::Capped(500)).is_none());
+        // Row budget, but the caller got exactly the limit it asked for.
+        assert!(note(Some(Truncation::RowBudget), BudgetSource::AsRequested).is_none());
+
+        let default = note(Some(Truncation::RowBudget), BudgetSource::Default).expect("worth disclosing");
         assert!(default.contains("25") && default.contains("100"), "{default}");
-        assert!(
-            default.contains("SKIP"),
-            "the note must name the way past the cap: {default}"
-        );
+        assert!(default.contains("SKIP"), "must name the way past the cap: {default}");
 
-        let capped = budget_note(BudgetSource::Capped(500), &l).expect("a cap is worth disclosing");
+        let capped = note(Some(Truncation::RowBudget), BudgetSource::Capped(500)).expect("worth disclosing");
         assert!(capped.contains("500") && capped.contains("100"), "{capped}");
+
+        let ceiling = note(Some(Truncation::RowBudget), BudgetSource::Ceiling).expect("worth disclosing");
+        assert!(ceiling.contains("100"), "{ceiling}");
+
+        // The byte cap must never be reported as a row cap: paging is the wrong fix,
+        // and the caller would page forever getting the same dropped rows.
+        let bytes = note(Some(Truncation::ByteCap), BudgetSource::Default).expect("worth disclosing");
+        assert!(bytes.contains("1024 KiB"), "should name the byte cap: {bytes}");
+        assert!(
+            !bytes.contains("SKIP") && !bytes.contains("no LIMIT"),
+            "byte-cap advice must not send the caller paging: {bytes}"
+        );
     }
 
     #[test]

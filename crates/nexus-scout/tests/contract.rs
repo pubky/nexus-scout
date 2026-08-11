@@ -95,7 +95,7 @@ fn served_guide_recipes_pass_the_sanitizer() {
 
     let mut checked = 0;
     for block in GUIDE.split("```cypher").skip(1) {
-        let query = block.split("```").next().expect("fenced block is closed").trim();
+        let query = block.split("```").next().unwrap_or(block).trim();
         if let Err(e) = s.sanitize(query) {
             panic!("guide recipe rejected as {:?}: {query}", e.reason());
         }

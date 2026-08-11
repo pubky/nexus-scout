@@ -234,7 +234,8 @@ async fn index_handler(State(state): State<AppState>) -> Json<serde_json::Value>
             "GET /v1/schema": "Node labels, relationship types, and example queries.",
             "GET /llms.txt": "Usage guide: recipes, limits, and error recovery.",
             "GET /health": "Liveness.",
-            "GET /ready": "Readiness. A 503 here does not stop /v1/query from serving queries.",
+            "GET /ready": "Readiness. A 503 means the server-side cost bounds are unset OR the check could not reach Neo4j; in the first case /v1/query still works, in the second it does not.",
+            "GET /metrics": "In-flight gauge and request counters, plain text.",
         },
         "example_request": {
             "method": "POST",
@@ -248,17 +249,25 @@ async fn index_handler(State(state): State<AppState>) -> Json<serde_json::Value>
         "limits": {
             "default_limit": limits.default_limit,
             "max_result_rows": limits.max_result_rows,
+            "max_result_bytes": limits.max_result_bytes,
             "max_path_depth": limits.guard.max_path_depth,
+            "max_query_length": limits.guard.max_query_length,
+            "max_param_count": limits.max_param_count,
+            "max_param_bytes": limits.max_param_bytes,
             "max_body_bytes": state.limits.max_body_bytes,
         },
         "notes": [
             format!(
-                "A query with no LIMIT returns {} rows; the ceiling is {}. Page past the ceiling with \
-                 SKIP/LIMIT and reconcile the total against a count() query.",
+                "A query with no LIMIT returns up to {} rows; the ceiling is {}. Page past the ceiling \
+                 with SKIP/LIMIT. `truncated` only fires when the gateway cut rows, so a query whose own \
+                 LIMIT returns exactly that many rows is not flagged: reconcile against a count().",
                 limits.default_limit, limits.max_result_rows
             ),
             "Read-only: writes, CALL, and admin clauses are rejected. Errors carry a machine-readable \
              code plus a hint describing the fix."
+                .to_owned(),
+            "The JSON error envelope covers /v1/query application errors. An oversized body (413) and a \
+             request timeout (504) are answered by the outer layers as plain text."
                 .to_owned(),
         ],
     }))
