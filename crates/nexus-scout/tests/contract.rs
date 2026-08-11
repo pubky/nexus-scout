@@ -84,6 +84,27 @@ fn schema_examples_pass_the_sanitizer() {
     }
 }
 
+/// Every Cypher recipe in the usage guide must survive the sanitizer. The guide is
+/// served verbatim at `/llms.txt`, so a recipe our own gateway rejects is a
+/// published instruction that cannot work, and the caller has no way to tell that
+/// the fault is ours.
+#[test]
+fn served_guide_recipes_pass_the_sanitizer() {
+    const GUIDE: &str = include_str!("../../../SKILL.md");
+    let s = Sanitizer::new(Limits::default());
+
+    let mut checked = 0;
+    for block in GUIDE.split("```cypher").skip(1) {
+        let query = block.split("```").next().expect("fenced block is closed").trim();
+        if let Err(e) = s.sanitize(query) {
+            panic!("guide recipe rejected as {:?}: {query}", e.reason());
+        }
+        checked += 1;
+    }
+    // Guards against the split silently finding nothing if the fences are renamed.
+    assert!(checked >= 8, "expected the guide's Cypher recipes, found {checked}");
+}
+
 #[test]
 fn error_codes_serialize_screaming_snake() {
     let cases = [

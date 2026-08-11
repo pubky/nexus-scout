@@ -190,6 +190,12 @@ const ACCEPT: &[&str] = &[
     "MATCH (a:User)--(b:User) RETURN a.name LIMIT 5",   // plain undirected match (not quantified), still allowed
     "MATCH (u:User) WHERE u.age > 0 RETURN u.name LIMIT 5", // number, space, keyword: fine
     "RETURN 0xFF AS hex, 1.5e3 AS float, 1_000 AS sep", // hex/exponent/underscore numerics still accepted
+    // The bare built-ins the CallClause hint and the served guide promise are usable
+    // without CALL. Rejecting one would make published instructions wrong.
+    "MATCH (a:User)-[r:FOLLOWS]->(b:User) RETURN type(r) AS kind, labels(a)[0] AS lbl LIMIT 5",
+    "MATCH (u:User) RETURN count(u) AS n, collect(u.name) AS names, datetime() AS now",
+    "MATCH p = shortestPath((a:User)-[:FOLLOWS*..5]->(b:User)) RETURN length(p) AS d LIMIT 5",
+    "MATCH (u:User) RETURN u.name AS name ORDER BY name SKIP 100 LIMIT 100", // SKIP paging, as the guide instructs
 ];
 
 #[test]

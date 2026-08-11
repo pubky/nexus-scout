@@ -415,7 +415,11 @@ mod tests {
         // The YAML header addresses skill loaders, not HTTP callers.
         assert!(!served.starts_with("---"), "frontmatter leaked: {:?}", &served[..40]);
         assert!(!served.contains("\nname: nexus-scout\n"), "frontmatter leaked");
-        assert!(served.starts_with('#'), "body should open on a heading: {:?}", &served[..40]);
+        assert!(
+            served.starts_with('#'),
+            "body should open on a heading: {:?}",
+            &served[..40]
+        );
 
         // The three facts a caller cannot get anywhere else: the base URL, the query
         // endpoint, and the request body's field name.

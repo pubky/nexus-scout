@@ -40,7 +40,12 @@ const READ_ENTRY: &[&str] = &["MATCH", "OPTIONAL", "WITH", "UNWIND", "RETURN"];
 /// list. Every deny table must be chained in here: it is the independent oracle
 /// the property test and the fuzzer scan accepted output against.
 pub(crate) fn denied_keywords() -> Vec<&'static str> {
-    DENY_MUTATION.iter().chain(DENY_CALL).chain(DENY_ADMIN).copied().collect()
+    DENY_MUTATION
+        .iter()
+        .chain(DENY_CALL)
+        .chain(DENY_ADMIN)
+        .copied()
+        .collect()
 }
 
 fn in_table(word: &str, table: &[&str]) -> bool {
@@ -80,9 +85,9 @@ pub(crate) fn classify(tokens: &[Token], src: &str) -> Result<(), SanitizeError>
         if in_table(word, DENY_MUTATION) {
             return Err(SanitizeError::new(RejectReason::Mutation, Some(t.start..t.end)));
         }
-        // Before the mutation check would have caught it via `CALL`: a `CALL { }`
-        // wrapping a write still reports the CALL, because removing the CALL is the
-        // fix either way and scan order should not decide the message.
+        // A `CALL { }` wrapping a write reports the CALL rather than the write:
+        // removing the CALL is the fix either way, so scan order does not get to
+        // decide the message.
         if in_table(word, DENY_CALL) {
             return Err(SanitizeError::new(RejectReason::CallClause, Some(t.start..t.end)));
         }

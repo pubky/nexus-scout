@@ -434,7 +434,10 @@ mod tests {
         assert_eq!(budget(None, ResultLimit::Fixed(100)), (100, BudgetSource::AsRequested));
         // Over the ceiling: cut, and the original ask is kept for the note.
         assert_eq!(budget(None, ResultLimit::Fixed(500)), (100, BudgetSource::Capped(500)));
-        assert_eq!(budget(Some(500), ResultLimit::Fixed(5)), (100, BudgetSource::Capped(500)));
+        assert_eq!(
+            budget(Some(500), ResultLimit::Fixed(5)),
+            (100, BudgetSource::Capped(500))
+        );
         // `LIMIT $n` reads to the ceiling; the server-side LIMIT does the cut, so the
         // gateway must not claim it capped anything.
         assert_eq!(budget(None, ResultLimit::Dynamic), (100, BudgetSource::AsRequested));
@@ -448,7 +451,10 @@ mod tests {
 
         let default = budget_note(BudgetSource::Default, &l).expect("default is worth disclosing");
         assert!(default.contains("25") && default.contains("100"), "{default}");
-        assert!(default.contains("SKIP"), "the note must name the way past the cap: {default}");
+        assert!(
+            default.contains("SKIP"),
+            "the note must name the way past the cap: {default}"
+        );
 
         let capped = budget_note(BudgetSource::Capped(500), &l).expect("a cap is worth disclosing");
         assert!(capped.contains("500") && capped.contains("100"), "{capped}");
