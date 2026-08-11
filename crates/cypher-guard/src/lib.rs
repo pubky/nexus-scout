@@ -42,8 +42,8 @@ pub struct Limits {
     /// Maximum query length in characters, checked after Unicode normalization.
     pub max_query_length: usize,
     /// Classic variable-length relationship paths (`*`, `*2..`) are capped at this
-    /// depth; Neo4j 5 quantified paths are bounded by the server transaction
-    /// timeout, not here.
+    /// depth. Neo4j 5 quantified path patterns are not rebindable this way and are
+    /// rejected outright ([`RejectReason::QuantifiedPath`]).
     pub max_path_depth: u32,
 }
 

@@ -11,7 +11,9 @@ End-to-end examples of answering natural-language questions about the Pubky soci
 Everything is read-only: the sanitizer rejects any write before it reaches Neo4j.
 
 > The client targets `https://nexus-scout.pubky.org` by default; override with `--server-url` or
-> `NEXUS_SCOUT_URL`. Results below are from the staging graph.
+> `NEXUS_SCOUT_URL`. **The outputs below were captured against a staging graph of ~1,682 users and
+> are kept to show the reasoning, not the current numbers.** Re-running them against the public
+> gateway gives different counts.
 
 ## Example 1: What are the most-used tags?
 
@@ -26,12 +28,15 @@ scout schema | jq '.relationships[] | select(.type=="TAGGED")'
   "type": "TAGGED",
   "from": "User",
   "to": "Post",
+  "description": "The tag text is this relationship's 'label' property. There is no Tag node to traverse to.",
   "properties": { "id": "string", "label": "string", "indexed_at": "integer" }
 }
 ```
 
-`TAGGED` is a `User → Post` edge and the tag text is the edge's `label` property (not a separate
-node), so "most-used tags" means counting `TAGGED` edges grouped by `label`.
+The tag text is the edge's `label` property, not a separate node, so "most-used tags" means counting
+`TAGGED` edges grouped by `label`. Note the selector above returns **two** entries: `TAGGED` runs
+`User → Post` and `User → User`, so a ranking that does not constrain the target counts tags on
+people as well as on posts.
 
 **Step 3 - write read-only Cypher and run it:**
 

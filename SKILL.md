@@ -21,8 +21,10 @@ curl -s https://nexus-scout.pubky.org/v1/query \
 ```
 
 ```json
-{"results":[{"name":"John Carvalho","followers":283}],"count":1,"truncated":false}
+{"results":[{"name":"John Carvalho","followers":283},{"name":"Pav","followers":161}],"count":10,"truncated":false}
 ```
+
+`count` always equals `results.len()`; the array above is elided for brevity.
 
 Body fields: `cypher` (required), `params` (object, optional), `limit` (number, optional, forces the
 row cap). Single-quote the shell argument so `$param` references reach the server intact.
@@ -117,32 +119,46 @@ curl -s https://nexus-scout.pubky.org/v1/query \
 ## Limits and paging
 
 **Rows are capped, and the cap is easy to miss.** No `LIMIT` gives you 25. The hard ceiling is 100,
-so `LIMIT 500` silently returns 100. `truncated: true` and the `notes` array tell you when a cap bit.
+so `LIMIT 500` returns 100 with a `notes` entry saying it was capped.
 
-Page past the ceiling with `SKIP`, and reconcile against a `count()` so you know when you have
-everything:
+**`truncated` does not mean "there is more".** It fires only when the *gateway* cut rows. If your own
+`LIMIT 50` returns 50 rows, Neo4j did the cutting and `truncated` stays `false`, even though more
+rows exist. So never treat a full page as the complete answer. Always get the total separately:
+
+```cypher
+MATCH (u:User {id: $id})-[:FOLLOWS]->(f:User)-[:FOLLOWS]->(u)
+RETURN count(DISTINCT f) AS total
+```
+
+then page with `SKIP` until you have that many:
 
 ```cypher
 MATCH (u:User {id: $id})-[:FOLLOWS]->(f:User)-[:FOLLOWS]->(u)
 RETURN f.name AS name ORDER BY name SKIP 100 LIMIT 100
 ```
 
-Getting this wrong is the most common way to report a confidently wrong number. If a count says 134
+Getting this wrong is the most common way to report a confidently wrong number. If the count says 134
 and your list has 100, you are missing 34.
 
 Other bounds:
 
+- **Query text is capped at 2000 characters.** This is the one most often hit first. A long
+  `WHERE ... OR ...` chain will trip it; use a parameter with a list and `IN $ids` instead.
+- Parameters: at most 32, and 8 KiB total across all of them.
 - Variable-length paths are capped at `*1..5`. Write `*` and it becomes `*1..5`; the response `notes`
   say so when it happens.
 - Queries time out around 10 s. Narrow the `MATCH`, add a `LIMIT`, or reduce depth.
-- Several `OPTIONAL MATCH` clauses in one query multiply into a cartesian product and time out. Run
-  separate queries instead, or wrap the counts in `count(DISTINCT ...)`.
+- Several `OPTIONAL MATCH` clauses in one query multiply into a cartesian product, which both inflates
+  counts and can time out. `count(DISTINCT ...)` fixes the inflated number but not the cost; to fix
+  the cost, split it into separate queries or put a `WITH` between the clauses.
+- The result payload is capped at 1 MiB. Past that, rows are dropped and `notes` says so. Paging does
+  not help; return fewer or smaller columns.
 - Request bodies are capped at 64 KiB.
 - Address result columns by name. Column order is not guaranteed.
 
 ## What is in the graph
 
-Four node labels and eight relationship types.
+Three node labels (`User`, `Post`, `File`) and eight relationship types.
 
 | you want | use |
 |---|---|
@@ -171,12 +187,15 @@ inferable only by counting `FOLLOWS` / `TAGGED` / `REPOSTED` edges.
 
 Read-only is enforced by a sanitizer, not by convention:
 
-- `CREATE`, `MERGE`, `SET`, `DELETE`, `REMOVE`, `DROP`, `FOREACH`, `LOAD`, and `INSERT` are rejected.
+- `CREATE`, `MERGE`, `SET`, `DELETE`, `DETACH`, `REMOVE`, `DROP`, `FOREACH`, `LOAD`, and `INSERT` are
+  rejected.
 - `CALL` is rejected in every form, both stored procedures and `CALL {}` subqueries. Bare functions
-  need no `CALL` and are fine: `count()`, `collect()`, `shortestPath()`, `datetime()`, `labels()`,
-  `type()`.
+  need no `CALL` and are fine: `count()`, `collect()`, `shortestPath()`, `labels()`, `type()`.
 - Namespaced calls (`apoc.*`, `db.*`, `dbms.*`, `gds.*`) are rejected.
 - Admin and selector clauses (`USE`, `SHOW`, `PROFILE`, `EXPLAIN`) are rejected.
+- **`USING` is rejected**, which catches read-only query hints (`USING INDEX`, `USING SCAN`,
+  `USING JOIN`) as well as `USING PERIODIC COMMIT`. The error says "mutating clause"; that wording is
+  wrong for a hint, so do not go looking for a write in your query. Just drop the hint.
 - Comments and `;` are rejected.
 - Quantified path patterns (`((a)-[:R]->(b)){1,3}`) are rejected. Use a bounded variable-length
   relationship instead: `-[:FOLLOWS*1..5]->`.
@@ -188,9 +207,16 @@ Read-only is enforced by a sanitizer, not by convention:
 {"results":[{"name":"Alice","followers":142}],"count":1,"truncated":false}
 ```
 
-`truncated: true` means a cap dropped rows. `notes` appears only when the gateway changed your query
-and reports what it did, for example `"variable-length path '*1..10' bounded to '*1..5'"`. Read it
-whenever a path or count answer looks smaller than you expected.
+`truncated: true` means the gateway dropped rows (see the caveat under Limits: your own `LIMIT` doing
+the cutting is *not* flagged). `notes` appears whenever the gateway rewrote your query or capped your
+rows, and says which, for example `"variable-length path '*1..10' bounded to '*1..5'"` or
+`"the requested limit of 500 was capped to the maximum of 100 rows"`. Read it whenever an answer
+looks smaller than you expected.
+
+Two value shapes to expect. A temporal or spatial value Neo4j cannot render as JSON comes back as
+`{"_unconvertible": "<type>"}`, so `RETURN datetime()` gives you a marker rather than a timestamp;
+compute from `indexed_at` (Unix ms) instead. A row that fails conversion outright becomes
+`{"_row_error": ...}` rather than failing the whole query.
 
 Errors are `{"error": CODE, "message": ..., "hint": ...}`. The `hint` names the fix.
 
@@ -202,16 +228,20 @@ Errors are `{"error": CODE, "message": ..., "hint": ...}`. The `hint` names the 
 | `RATE_LIMITED` | Too many requests | Back off and retry. Batch your questions into fewer, larger queries rather than looping one row at a time. |
 | `INTERNAL_ERROR` | Transient | Retry once. |
 
-A 503 from `/ready` means the operators have not finished configuring server-side cost bounds. It
-does not stop `/v1/query` from answering.
+Not every failure uses that envelope: an oversized body (413) and a request timeout (504) are
+answered by the outer HTTP layers as plain text, so check the status before parsing JSON.
+
+A 503 from `/ready` means either the server-side cost bounds are unset or the readiness check could
+not reach Neo4j. In the first case `/v1/query` still answers normally; in the second it does not, so
+try a query rather than assuming either way.
 
 ## The CLI (optional)
 
-`scout` wraps the same HTTP API with exit codes for scripting. curl is enough; use this if you want
-the ergonomics.
+`scout` wraps the same HTTP API with exit codes for scripting. **curl is enough and needs no
+install**; this is only for ergonomics, and it has to be built from a source checkout.
 
 ```sh
-cargo install --git https://github.com/pubky/nexus-scout nexus-scout-cli
+cargo install --path crates/nexus-scout-cli   # from a clone of the repo
 scout query "MATCH (u:User) RETURN u.name LIMIT 5"
 scout schema
 ```

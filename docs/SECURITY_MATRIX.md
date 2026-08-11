@@ -151,11 +151,12 @@ mistaken for guarantees.
    read-only `CALL { }` subqueries and `USING` query hints are rejected. This
    trades ergonomics for a sound sole guard ([ADR-0001](adr/0001-tokenizer-sanitizer.md));
    surfaced to agents in `SKILL.md`.
-3. **Quantified path patterns are not bounded.** Neo4j 5 `(...)+` / `(...){1,n}`
-   patterns are read-only but not cost-bounded by the path transform (only legacy
-   `*` ranges are). This is a *traversal cost* concern, not a write concern; the
-   bound is the server-side `db.transaction.timeout` + transaction memory limit,
-   not the sanitizer (see `Limits::max_path_depth` doc and the README guardrails).
+3. **Quantified path patterns are rejected outright.** Neo4j 5 `(...)+` /
+   `(...){1,n}` patterns are read-only but are not cost-bounded by the path
+   transform (which only rebinds legacy `*` ranges), so they are denied
+   (`QuantifiedPath`) rather than accepted and left to the server timeout. Callers
+   are told to use a bounded variable-length relationship instead. The residual risk
+   is ergonomic, not a write or cost concern.
 4. **Caps bound output, not server work.** The row and byte caps bound what is
    returned; a broad scan/sort/aggregation can still be expensive before the
    first row. Server execution cost is bounded server-side, not by this gateway.

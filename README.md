@@ -43,7 +43,7 @@ The public instance is `https://nexus-scout.pubky.org`. No account or API key.
 | Method + path | Purpose |
 |---------------|---------|
 | `GET /` | Service descriptor: endpoints, an example request, and the live limits. |
-| `GET /llms.txt` | Usage guide for agents (`SKILL.md`, served verbatim). |
+| `GET /llms.txt` | Usage guide for agents (`SKILL.md`'s body, with the skill frontmatter stripped). |
 | `POST /v1/query` | Run a read-only query: body `{ "cypher": ..., "params"?: {…}, "limit"?: n }`. |
 | `GET /v1/schema` | The curated graph schema. |
 | `GET /health` | Liveness (process up). |
@@ -90,7 +90,7 @@ JSON is always on **stdout** (so `| jq` works); exit codes: `0` ok, `1` internal
 `2` rejected, `3` timeout.
 
 ```sh
-cargo install --git https://github.com/pubky/nexus-scout nexus-scout-cli
+cargo install --path crates/nexus-scout-cli
 ```
 
 ## Guardrails
