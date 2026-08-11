@@ -199,6 +199,7 @@ Errors are `{"error": CODE, "message": ..., "hint": ...}`. The `hint` names the 
 | `QUERY_REJECTED` | A guardrail refused the query | Read the `hint`; it names the clause. Rewrite with plain `MATCH`/`WITH`/`RETURN`. |
 | `QUERY_SYNTAX_ERROR` | Neo4j could not parse it | `message` carries the offending token, line, and column. Fix and resend. |
 | `QUERY_TIMEOUT` | Too expensive | Add a `LIMIT`, narrow the `MATCH`, reduce path depth, or split one query into several. |
+| `RATE_LIMITED` | Too many requests | Back off and retry. Batch your questions into fewer, larger queries rather than looping one row at a time. |
 | `INTERNAL_ERROR` | Transient | Retry once. |
 
 A 503 from `/ready` means the operators have not finished configuring server-side cost bounds. It

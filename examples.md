@@ -10,8 +10,8 @@ End-to-end examples of answering natural-language questions about the Pubky soci
 
 Everything is read-only: the sanitizer rejects any write before it reaches Neo4j.
 
-> Point the client at the gateway with `--server-url` or `NEXUS_SCOUT_URL` (default
-> `http://localhost:8080`). Results below are from the staging graph.
+> The client targets `https://nexus-scout.pubky.org` by default; override with `--server-url` or
+> `NEXUS_SCOUT_URL`. Results below are from the staging graph.
 
 ## Example 1: What are the most-used tags?
 

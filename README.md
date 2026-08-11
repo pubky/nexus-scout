@@ -51,10 +51,12 @@ The public instance is `https://nexus-scout.pubky.org`. No account or API key.
 | `GET /metrics` | In-flight gauge + request/shed counters (plain text). |
 
 ```sh
-curl -s localhost:8080/v1/schema | jq .nodes
-curl -s -XPOST localhost:8080/v1/query -H 'content-type: application/json' \
+curl -s https://nexus-scout.pubky.org/v1/schema | jq .nodes
+curl -s -XPOST https://nexus-scout.pubky.org/v1/query -H 'content-type: application/json' \
   -d '{"cypher":"MATCH (u:User) RETURN u.name AS name LIMIT 5"}' | jq
 ```
+
+Swap the host for `localhost:8080` when running the stack from `docker/docker-compose.yml`.
 
 Success and error share one envelope shape: `{ results, count, truncated, notes? }` or
 `{ error, message, hint }`. Codes map to status: `QUERY_REJECTED`/`QUERY_SYNTAX_ERROR` → 400,
@@ -83,8 +85,13 @@ scout query --params-json '{"since": 1709251200000}' \
 ```
 
 `scout` is a thin client of the HTTP API (target it via `--server-url` or `NEXUS_SCOUT_URL`, default
-`http://localhost:8080`); it holds no Neo4j credentials. JSON is always on **stdout** (so `| jq`
-works); exit codes: `0` ok, `1` internal/transient, `2` rejected, `3` timeout.
+`https://nexus-scout.pubky.org`, so it works with no configuration); it holds no Neo4j credentials.
+JSON is always on **stdout** (so `| jq` works); exit codes: `0` ok, `1` internal/transient,
+`2` rejected, `3` timeout.
+
+```sh
+cargo install --git https://github.com/pubky/nexus-scout nexus-scout-cli
+```
 
 ## Guardrails
 
