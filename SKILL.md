@@ -8,7 +8,10 @@ description: Use when you need facts from the Pubky social graph - who follows w
 nexus-scout is a public, read-only gateway to the Pubky social graph. You write Cypher, it validates
 the query is read-only, runs it against Neo4j, and returns JSON. No account, no API key, no install.
 
-**Base URL: `https://nexus-scout.pubky.org`**
+**Base URL: the host that served you this document.** The public instance is
+`https://nexus-scout.pubky.org`, which the examples below use. If you fetched this from somewhere
+else, a local or staging gateway, substitute that host everywhere: the graph behind each deployment
+is different, so pointing these examples at the public instance would answer a different question.
 
 ## Quickstart
 
@@ -21,10 +24,11 @@ curl -s https://nexus-scout.pubky.org/v1/query \
 ```
 
 ```json
-{"results":[{"name":"John Carvalho","followers":283},{"name":"Pav","followers":161}],"count":10,"truncated":false}
+{"results":[{"name":"Alice","followers":283},{"name":"Bob","followers":161}],"count":10,"truncated":false}
 ```
 
-`count` always equals `results.len()`; the array above is elided for brevity.
+Shape only, with the array elided: `count` always equals `results.len()`. Names and numbers depend on
+the graph behind the deployment you are querying.
 
 Body fields: `cypher` (required), `params` (object, optional), `limit` (number, optional, forces the
 row cap). Single-quote the shell argument so `$param` references reach the server intact.
@@ -52,8 +56,9 @@ RETURN u.id AS id, u.name AS name, u.bio AS bio, count(f) AS followers
 ORDER BY followers DESC LIMIT 10
 ```
 
-Pick by follower count and bio when several match. Searching "Carvalho" returns four users, one of
-whom has 283 followers and another 2.
+Pick by follower count and bio when several match. A common surname routinely returns several
+accounts with wildly different follower counts, including near-empty impersonations, so resolve to an
+`id` before asking anything else about "that person".
 
 **Friends.** There is no friendship edge. The usual reading is a mutual follow:
 
@@ -118,8 +123,9 @@ curl -s https://nexus-scout.pubky.org/v1/query \
 
 ## Limits and paging
 
-**Rows are capped, and the cap is easy to miss.** No `LIMIT` gives you 25. The hard ceiling is 100,
-so `LIMIT 500` returns 100 with a `notes` entry saying it was capped.
+**Rows are capped, and the cap is easy to miss.** No `LIMIT` gives you 25. The hard ceiling is 100:
+`LIMIT 500` returns at most 100, and if more than 100 rows matched you get 100 plus a `notes` entry
+saying it was capped. Fewer matching rows come back untouched and unflagged.
 
 **`truncated` does not mean "there is more".** It fires only when the *gateway* cut rows. If your own
 `LIMIT 50` returns 50 rows, Neo4j did the cutting and `truncated` stays `false`, even though more
