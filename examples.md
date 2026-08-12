@@ -10,7 +10,7 @@ End-to-end examples of answering natural-language questions about the Pubky soci
 
 Everything is read-only: the sanitizer rejects any write before it reaches Neo4j.
 
-> The client targets `https://nexus-scout.pubky.org` by default; override with `--server-url` or
+> The client targets `https://nexus-scout.pubky.app` by default; override with `--server-url` or
 > `NEXUS_SCOUT_URL`. **The outputs below were captured against a staging graph of ~1,682 users and
 > are kept to show the reasoning, not the current numbers.** Re-running them against the public
 > gateway gives different counts.

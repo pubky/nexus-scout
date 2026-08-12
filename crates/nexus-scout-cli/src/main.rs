@@ -74,7 +74,7 @@ fn main() -> ExitCode {
 /// works on a fresh machine with no configuration; the gateway is read-only and
 /// unauthenticated, so reaching it by accident costs nothing. Point at a local
 /// server with `--server-url` or `NEXUS_SCOUT_URL`.
-pub(crate) const DEFAULT_SERVER_URL: &str = "https://nexus-scout.pubky.org";
+pub(crate) const DEFAULT_SERVER_URL: &str = "https://nexus-scout.pubky.app";
 
 /// Resolves the gateway base URL: `--server-url` > `NEXUS_SCOUT_URL` >
 /// [`DEFAULT_SERVER_URL`].
@@ -237,7 +237,7 @@ mod tests {
         // With nothing configured the CLI must reach the public gateway, so it
         // works on a fresh machine with no setup.
         assert_eq!(resolve_url(None), DEFAULT_SERVER_URL);
-        assert_eq!(DEFAULT_SERVER_URL, "https://nexus-scout.pubky.org");
+        assert_eq!(DEFAULT_SERVER_URL, "https://nexus-scout.pubky.app");
     }
 
     #[test]

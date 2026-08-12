@@ -9,7 +9,7 @@ nexus-scout is a public, read-only gateway to the Pubky social graph. You write 
 the query is read-only, runs it against Neo4j, and returns JSON. No account, no API key, no install.
 
 **Base URL: the host that served you this document.** The public instance is
-`https://nexus-scout.pubky.org`, which the examples below use. If you fetched this from somewhere
+`https://nexus-scout.pubky.app`, which the examples below use. If you fetched this from somewhere
 else, a local or staging gateway, substitute that host everywhere: the graph behind each deployment
 is different, so pointing these examples at the public instance would answer a different question.
 
@@ -18,7 +18,7 @@ is different, so pointing these examples at the public instance would answer a d
 One POST is the whole API:
 
 ```sh
-curl -s https://nexus-scout.pubky.org/v1/query \
+curl -s https://nexus-scout.pubky.app/v1/query \
   -H 'content-type: application/json' \
   -d '{"cypher":"MATCH (u:User)<-[f:FOLLOWS]-() RETURN u.name AS name, count(f) AS followers ORDER BY followers DESC LIMIT 10"}'
 ```
@@ -33,10 +33,20 @@ the graph behind the deployment you are querying.
 Body fields: `cypher` (required), `params` (object, optional), `limit` (number, optional, forces the
 row cap). Single-quote the shell argument so `$param` references reach the server intact.
 
+**If you can only issue GET requests**, the same endpoint takes a query string. Reading changes
+nothing, so both verbs do the same work:
+
+```
+https://nexus-scout.pubky.app/v1/query?cypher=MATCH%20(u:User)%20RETURN%20u.name%20LIMIT%205
+```
+
+Percent-encode the Cypher. `params` takes a percent-encoded JSON object and `limit` a number. Use
+POST when a query is long, since URLs have their own length limits.
+
 ## Learn the schema first
 
 ```sh
-curl -s https://nexus-scout.pubky.org/v1/schema
+curl -s https://nexus-scout.pubky.app/v1/schema
 ```
 
 Returns the node labels and their properties, the relationship types with direction, and example
@@ -126,7 +136,7 @@ RETURN length(path) AS distance, [n IN nodes(path) | n.name] AS chain
 Parameters go in `params`:
 
 ```sh
-curl -s https://nexus-scout.pubky.org/v1/query \
+curl -s https://nexus-scout.pubky.app/v1/query \
   -H 'content-type: application/json' \
   -d '{"cypher":"MATCH (u:User {id: $id})-[:FOLLOWS]->(f)-[:FOLLOWS]->(u) RETURN count(DISTINCT f) AS friends",
        "params":{"id":"ihaqcthsdbk751sxctk849bdr7yz7a934qen5gmpcbwcur49i97y"}}'
@@ -266,7 +276,7 @@ scout query "MATCH (u:User) RETURN u.name LIMIT 5"
 scout schema
 ```
 
-It defaults to `https://nexus-scout.pubky.org`; override with `--server-url` or `NEXUS_SCOUT_URL`.
+It defaults to `https://nexus-scout.pubky.app`; override with `--server-url` or `NEXUS_SCOUT_URL`.
 Parameters take `--param key=value` for strings and `--params-json '{...}'` for typed values. Exit
 codes: `0` ok, `1` internal or transient, `2` rejected, `3` timeout. The JSON envelope always goes to
 stdout for `jq`.
