@@ -9,7 +9,7 @@ nexus-scout is a public, read-only gateway to the Pubky social graph. You write 
 the query is read-only, runs it against Neo4j, and returns JSON. No account, no API key, no install.
 
 **Base URL: the host that served you this document.** The public instance is
-`https://nexus-scout.pubky.org`, which the examples below use. If you fetched this from somewhere
+`https://nexus-scout.pubky.app`, which the examples below use. If you fetched this from somewhere
 else, a local or staging gateway, substitute that host everywhere: the graph behind each deployment
 is different, so pointing these examples at the public instance would answer a different question.
 
@@ -18,7 +18,7 @@ is different, so pointing these examples at the public instance would answer a d
 One POST is the whole API:
 
 ```sh
-curl -s https://nexus-scout.pubky.org/v1/query \
+curl -s https://nexus-scout.pubky.app/v1/query \
   -H 'content-type: application/json' \
   -d '{"cypher":"MATCH (u:User)<-[f:FOLLOWS]-() RETURN u.name AS name, count(f) AS followers ORDER BY followers DESC LIMIT 10"}'
 ```
@@ -33,10 +33,20 @@ the graph behind the deployment you are querying.
 Body fields: `cypher` (required), `params` (object, optional), `limit` (number, optional, forces the
 row cap). Single-quote the shell argument so `$param` references reach the server intact.
 
+**If you can only issue GET requests**, the same endpoint takes a query string. Reading changes
+nothing, so both verbs do the same work:
+
+```
+https://nexus-scout.pubky.app/v1/query?cypher=MATCH%20(u:User)%20RETURN%20u.name%20LIMIT%205
+```
+
+Percent-encode the Cypher. `params` takes a percent-encoded JSON object and `limit` a number. Use
+POST when a query is long, since URLs have their own length limits.
+
 ## Learn the schema first
 
 ```sh
-curl -s https://nexus-scout.pubky.org/v1/schema
+curl -s https://nexus-scout.pubky.app/v1/schema
 ```
 
 Returns the node labels and their properties, the relationship types with direction, and example
@@ -67,20 +77,31 @@ MATCH (u:User {id: $id})-[:FOLLOWS]->(f:User)-[:FOLLOWS]->(u)
 RETURN count(DISTINCT f) AS friends
 ```
 
-Swap `count(DISTINCT f)` for `f.name AS name` plus `ORDER BY`/`SKIP`/`LIMIT` to list them. Run the
-count first: the list is capped (see Limits) and the count tells you whether you got all of them.
-Say which definition you used, since one-way follows give different numbers.
+Swap `count(DISTINCT f)` for `f.id AS id, f.name AS name` plus `ORDER BY f.id`/`SKIP`/`LIMIT` to list
+them. Run the count first: the list is capped (see Limits) and the count tells you whether you got all
+of them. Say which definition you used, since one-way follows give different numbers.
 
-**Someone's most-used tag.** `TAGGED` points at both posts and users, and the answer can change
-depending on which you count, so split it when it matters:
+**Someone's most-used tag.** Start with the combined ranking, which is the answer to the question as
+usually asked:
 
 ```cypher
 MATCH (u:User {id: $id})-[t:TAGGED]->(x)
-RETURN t.label AS tag, count(*) AS uses, labels(x)[0] AS target
+RETURN t.label AS tag, count(*) AS uses
 ORDER BY uses DESC LIMIT 20
 ```
 
-Drop `labels(x)[0]` for a combined ranking. Add `WHERE x:Post` to count only post tags.
+Then check whether the split changes it, because `TAGGED` points at both posts and users and the
+winner really can flip:
+
+```cypher
+MATCH (u:User {id: $id})-[t:TAGGED]->(x)
+RETURN t.label AS tag, labels(x)[0] AS target, count(*) AS uses
+ORDER BY uses DESC LIMIT 20
+```
+
+A label used heavily on both posts and people can top the combined ranking while a posts-only label
+tops the split one. Report the combined number and mention the split when they disagree. Add
+`WHERE x:Post` to count post tags alone.
 
 **Trending tags.**
 
@@ -115,10 +136,10 @@ RETURN length(path) AS distance, [n IN nodes(path) | n.name] AS chain
 Parameters go in `params`:
 
 ```sh
-curl -s https://nexus-scout.pubky.org/v1/query \
+curl -s https://nexus-scout.pubky.app/v1/query \
   -H 'content-type: application/json' \
   -d '{"cypher":"MATCH (u:User {id: $id})-[:FOLLOWS]->(f)-[:FOLLOWS]->(u) RETURN count(DISTINCT f) AS friends",
-       "params":{"id":"gujx6qd8ksydh1makdphd3bxu351d9b8waqka8hfg6q7hnqkxexo"}}'
+       "params":{"id":"ihaqcthsdbk751sxctk849bdr7yz7a934qen5gmpcbwcur49i97y"}}'
 ```
 
 ## Limits and paging
@@ -128,23 +149,26 @@ curl -s https://nexus-scout.pubky.org/v1/query \
 saying it was capped. Fewer matching rows come back untouched and unflagged.
 
 **`truncated` does not mean "there is more".** It fires only when the *gateway* cut rows. If your own
-`LIMIT 50` returns 50 rows, Neo4j did the cutting and `truncated` stays `false`, even though more
-rows exist. So never treat a full page as the complete answer. Always get the total separately:
+`LIMIT 50` returns 50 rows, Neo4j did the cutting, the gateway never saw a 51st row, and `truncated`
+stays `false` even though more rows exist. When that happens you get a `notes` entry saying the page
+exactly filled your limit, but treat any full page as suspect and get the total separately:
 
 ```cypher
 MATCH (u:User {id: $id})-[:FOLLOWS]->(f:User)-[:FOLLOWS]->(u)
 RETURN count(DISTINCT f) AS total
 ```
 
-then page with `SKIP` until you have that many:
+then page with `SKIP` until you have that many. **Order by `id`, never by `name`:** display names are
+not unique here, and duplicates straddling a page boundary silently drop or repeat rows.
 
 ```cypher
 MATCH (u:User {id: $id})-[:FOLLOWS]->(f:User)-[:FOLLOWS]->(u)
-RETURN f.name AS name ORDER BY name SKIP 100 LIMIT 100
+RETURN f.id AS id, f.name AS name ORDER BY f.id SKIP 100 LIMIT 100
 ```
 
-Getting this wrong is the most common way to report a confidently wrong number. If the count says 134
-and your list has 100, you are missing 34.
+Getting this wrong is the most common way to report a confidently wrong number: if the count says
+N and your list has 100, you are missing N-100. Check the page count against the count query before
+you answer.
 
 Other bounds:
 
@@ -248,7 +272,7 @@ scout query "MATCH (u:User) RETURN u.name LIMIT 5"
 scout schema
 ```
 
-It defaults to `https://nexus-scout.pubky.org`; override with `--server-url` or `NEXUS_SCOUT_URL`.
+It defaults to `https://nexus-scout.pubky.app`; override with `--server-url` or `NEXUS_SCOUT_URL`.
 Parameters take `--param key=value` for strings and `--params-json '{...}'` for typed values. Exit
 codes: `0` ok, `1` internal or transient, `2` rejected, `3` timeout. The JSON envelope always goes to
 stdout for `jq`.

@@ -38,13 +38,14 @@ nexus-scout serve --transport stdio
 
 ## HTTP API
 
-The public instance is `https://nexus-scout.pubky.org`. No account or API key.
+The public instance is `https://nexus-scout.pubky.app`. No account or API key.
 
 | Method + path | Purpose |
 |---------------|---------|
 | `GET /` | Service descriptor: endpoints, an example request, and the live limits. |
 | `GET /llms.txt` | Usage guide for agents (`SKILL.md`'s body, with the skill frontmatter stripped). |
 | `POST /v1/query` | Run a read-only query: body `{ "cypher": ..., "params"?: {…}, "limit"?: n }`. |
+| `GET /v1/query` | The same operation via query string (`?cypher=…&params=…&limit=…`), for callers that cannot send a body. Answers `Cache-Control: no-store`. |
 | `GET /v1/schema` | The curated graph schema. |
 
 The operational endpoints below are served on a **separate listener** (`METRICS_ADDR`, default `127.0.0.1:9090`) so probes and metrics stay off the public gateway. Keep this port internal - never front it with the reverse proxy.
@@ -56,8 +57,8 @@ The operational endpoints below are served on a **separate listener** (`METRICS_
 | `GET /metrics` | In-flight gauge + request/shed counters (plain text). |
 
 ```sh
-curl -s https://nexus-scout.pubky.org/v1/schema | jq .nodes
-curl -s -XPOST https://nexus-scout.pubky.org/v1/query -H 'content-type: application/json' \
+curl -s https://nexus-scout.pubky.app/v1/schema | jq .nodes
+curl -s -XPOST https://nexus-scout.pubky.app/v1/query -H 'content-type: application/json' \
   -d '{"cypher":"MATCH (u:User) RETURN u.name AS name LIMIT 5"}' | jq
 ```
 
@@ -90,7 +91,7 @@ scout query --params-json '{"since": 1709251200000}' \
 ```
 
 `scout` is a thin client of the HTTP API (target it via `--server-url` or `NEXUS_SCOUT_URL`, default
-`https://nexus-scout.pubky.org`, so it works with no configuration); it holds no Neo4j credentials.
+`https://nexus-scout.pubky.app`, so it works with no configuration); it holds no Neo4j credentials.
 JSON is always on **stdout** (so `| jq` works); exit codes: `0` ok, `1` internal/transient,
 `2` rejected, `3` timeout.
 

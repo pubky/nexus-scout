@@ -10,13 +10,14 @@ use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use axum::extract::rejection::JsonRejection;
-use axum::extract::{FromRequest, Request, State};
-use axum::http::{HeaderValue, StatusCode};
+use axum::extract::{FromRequest, Query, Request, State};
+use axum::http::{header, HeaderValue, StatusCode};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde::de::DeserializeOwned;
+use serde::Deserialize;
 use tower_http::catch_panic::CatchPanicLayer;
 use tower_http::limit::RequestBodyLimitLayer;
 use tower_http::request_id::{MakeRequestId, PropagateRequestIdLayer, RequestId, SetRequestIdLayer};
@@ -90,10 +91,11 @@ pub fn routers(scout: Scout, limits: HttpLimits) -> (Router, Router) {
 /// operational probes live on [`metrics_router`], bound to a separate port.
 fn public_router(state: AppState) -> Router {
     let limits = state.limits;
-
-    // Cost controls apply to /v1/query only; the schema/index routes stay cheap and are never shed.
+    // Cost controls apply to /v1/query only; probes and schema stay cheap and are never shed.
+    // GET and POST are the same operation: a read-only query mutates nothing, so GET is
+    // the honest verb, and some agents can issue nothing else.
     let query = Router::new()
-        .route("/v1/query", post(query_handler))
+        .route("/v1/query", post(query_handler).get(query_get_handler))
         .layer(axum::middleware::from_fn_with_state(state.clone(), admit))
         .layer(RequestBodyLimitLayer::new(limits.max_body_bytes));
 
@@ -237,6 +239,48 @@ async fn query_handler(
     Ok(Json(response))
 }
 
+/// Query-string form of [`QueryRequest`]. Every field is optional and untyped so a
+/// malformed request is answered with the standard error envelope rather than
+/// axum's own rejection text, which a caller cannot parse the same way.
+#[derive(Debug, Deserialize)]
+struct QueryStringRequest {
+    cypher: Option<String>,
+    params: Option<String>,
+    limit: Option<String>,
+}
+
+/// `GET /v1/query?cypher=...` — the same operation as the POST, for callers that
+/// cannot send a request body. Read-only queries change nothing, so GET is the
+/// correct verb; several agent runtimes (browser-based fetchers, link-following
+/// tools) can issue no other method, and without this the service is unusable to
+/// them. Answers `Cache-Control: no-store` so a GET is not cached where the
+/// equivalent POST would not have been.
+async fn query_get_handler(
+    State(state): State<AppState>,
+    Query(req): Query<QueryStringRequest>,
+) -> Result<Response, ApiError> {
+    let Some(cypher) = req.cypher else {
+        return Err(ApiError(Error::bad_request(
+            "missing the `cypher` query parameter, e.g. /v1/query?cypher=MATCH%20(u:User)%20RETURN%20u.name%20LIMIT%205",
+        )));
+    };
+    let params = match req.params.as_deref() {
+        None | Some("") => serde_json::Map::new(),
+        Some(raw) => serde_json::from_str(raw)
+            .map_err(|e| ApiError(Error::bad_request(format!("`params` must be a JSON object: {e}"))))?,
+    };
+    let limit = match req.limit.as_deref() {
+        None | Some("") => None,
+        Some(raw) => Some(
+            raw.parse::<u32>()
+                .map_err(|e| ApiError(Error::bad_request(format!("`limit` must be a whole number: {e}"))))?,
+        ),
+    };
+
+    let response = state.scout.query(&cypher, params, limit).await.map_err(ApiError)?;
+    Ok(([(header::CACHE_CONTROL, "no-store")], Json(response)).into_response())
+}
+
 async fn schema_handler() -> Json<&'static GraphSchema> {
     Json(curated_schema())
 }
@@ -257,17 +301,68 @@ async fn llms_handler() -> &'static str {
     strip_frontmatter(SKILL_DOC)
 }
 
+/// The absolute base URL this request arrived on, so the descriptor can hand back
+/// URLs that are fetchable as-is rather than paths the caller must assemble. Derived
+/// from `Host` so a self-hosted or staging deployment describes itself, not the
+/// public one. `x-forwarded-proto` is honored when a proxy sets it; otherwise a
+/// loopback host is assumed plaintext and anything else TLS.
+fn base_url(headers: &axum::http::HeaderMap) -> String {
+    let host = headers
+        .get(header::HOST)
+        .and_then(|v| v.to_str().ok())
+        .filter(|h| !h.is_empty())
+        .unwrap_or("localhost");
+    let scheme = headers
+        .get("x-forwarded-proto")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or(if host.starts_with("localhost") || host.starts_with("127.0.0.1") {
+            "http"
+        } else {
+            "https"
+        });
+    format!("{scheme}://{host}")
+}
+
+/// Percent-encodes a Cypher string for use in a query string. Conservative on
+/// purpose: everything outside the unreserved set is escaped, so the result is safe
+/// in any position.
+fn urlencode(s: &str) -> String {
+    const HEX: &[u8; 16] = b"0123456789ABCDEF";
+    let mut out = String::with_capacity(s.len() * 2);
+    for b in s.bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => out.push(b as char),
+            _ => {
+                out.push('%');
+                out.push(HEX[usize::from(b >> 4)] as char);
+                out.push(HEX[usize::from(b & 0x0f)] as char);
+            }
+        }
+    }
+    out
+}
+
 /// Service descriptor for the bare base URL. A caller that arrives knowing only
 /// the hostname has to learn the query path, the request body's field names, and
 /// the row cap before it can do anything, so all three are stated here rather
 /// than left to be discovered from 404s and deserialization errors.
-async fn index_handler(State(state): State<AppState>) -> Json<serde_json::Value> {
+async fn index_handler(State(state): State<AppState>, headers: axum::http::HeaderMap) -> Json<serde_json::Value> {
     let limits = state.scout.limits();
+    let base = base_url(&headers);
+    let example =
+        "MATCH (u:User)<-[f:FOLLOWS]-() RETURN u.name AS name, count(f) AS followers ORDER BY followers DESC LIMIT 10";
     Json(serde_json::json!({
         "service": "nexus-scout",
         "description": "Read-only Cypher gateway to the Pubky social graph.",
-        "start_here": "/llms.txt",
+        "start_here": format!("{base}/llms.txt"),
+        // Absolute, because a fetcher restricted to URLs it has already seen can only
+        // follow a link it can read here.
+        "links": {
+            "guide": format!("{base}/llms.txt"),
+            "schema": format!("{base}/v1/schema"),
+        },
         "endpoints": {
+            "GET /v1/query": "Run read-only Cypher via the query string. Same operation as the POST, for callers that cannot send a body.",
             "POST /v1/query": "Run read-only Cypher.",
             "GET /v1/schema": "Node labels, relationship types, and example queries.",
             "GET /llms.txt": "Usage guide: recipes, limits, and error recovery.",
@@ -276,11 +371,10 @@ async fn index_handler(State(state): State<AppState>) -> Json<serde_json::Value>
             "method": "POST",
             "path": "/v1/query",
             "headers": { "content-type": "application/json" },
-            "body": {
-                "cypher": "MATCH (u:User)<-[f:FOLLOWS]-() RETURN u.name AS name, count(f) AS followers ORDER BY followers DESC LIMIT 10",
-                "params": {},
-            },
+            "body": { "cypher": example, "params": {} },
         },
+        // Spelled out as one fetchable URL so a GET-only caller has nothing to assemble.
+        "example_request_get": format!("{base}/v1/query?cypher={}", urlencode(example)),
         "limits": {
             "default_limit": limits.default_limit,
             "max_result_rows": limits.max_result_rows,
@@ -295,7 +389,8 @@ async fn index_handler(State(state): State<AppState>) -> Json<serde_json::Value>
             format!(
                 "A query with no LIMIT returns up to {} rows; the ceiling is {}. Page past the ceiling \
                  with SKIP/LIMIT. `truncated` only fires when the gateway cut rows, so a query whose own \
-                 LIMIT returns exactly that many rows is not flagged: reconcile against a count().",
+                 LIMIT returns exactly that many rows is not flagged as truncated; `notes` says so \
+                 instead, and a count() is the way to the true total.",
                 limits.default_limit, limits.max_result_rows
             ),
             "Read-only: writes, CALL, and admin clauses are rejected. Errors carry a machine-readable \
@@ -467,9 +562,50 @@ mod tests {
 
         // The three facts a caller cannot get anywhere else: the base URL, the query
         // endpoint, and the request body's field name.
-        assert!(served.contains("https://nexus-scout.pubky.org"));
+        assert!(served.contains("https://nexus-scout.pubky.app"));
         assert!(served.contains("/v1/query"));
         assert!(served.contains("\"cypher\""));
+    }
+
+    #[test]
+    fn base_url_describes_the_host_that_was_asked() {
+        let with = |pairs: &[(&str, &str)]| {
+            let mut h = axum::http::HeaderMap::new();
+            for (k, v) in pairs {
+                h.insert(
+                    axum::http::HeaderName::from_bytes(k.as_bytes()).unwrap(),
+                    HeaderValue::from_str(v).unwrap(),
+                );
+            }
+            base_url(&h)
+        };
+        // A self-hosted or staging deployment must describe itself, never the public one.
+        assert_eq!(
+            with(&[("host", "nexus-scout.pubky.app")]),
+            "https://nexus-scout.pubky.app"
+        );
+        assert_eq!(with(&[("host", "scout.internal:8080")]), "https://scout.internal:8080");
+        // Loopback is plaintext in practice; a proxy's own scheme wins when it says.
+        assert_eq!(with(&[("host", "localhost:8080")]), "http://localhost:8080");
+        assert_eq!(with(&[("host", "127.0.0.1:8080")]), "http://127.0.0.1:8080");
+        assert_eq!(
+            with(&[("host", "localhost:8080"), ("x-forwarded-proto", "https")]),
+            "https://localhost:8080"
+        );
+        // No Host at all still yields something well-formed rather than a panic.
+        assert!(with(&[]).starts_with("http://"));
+    }
+
+    #[test]
+    fn urlencode_escapes_everything_cypher_can_contain() {
+        // Unreserved characters survive; everything else escapes, so the result is
+        // safe wherever it lands in a URL.
+        assert_eq!(urlencode("abcXYZ019-_.~"), "abcXYZ019-_.~");
+        assert_eq!(urlencode("MATCH (u:User)"), "MATCH%20%28u%3AUser%29");
+        assert_eq!(urlencode(" "), "%20");
+        assert_eq!(urlencode("&=?#+%"), "%26%3D%3F%23%2B%25");
+        // Multi-byte input is escaped per UTF-8 byte, not per char.
+        assert_eq!(urlencode("é"), "%C3%A9");
     }
 
     #[test]
