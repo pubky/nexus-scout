@@ -233,9 +233,6 @@ async fn index_handler(State(state): State<AppState>) -> Json<serde_json::Value>
             "POST /v1/query": "Run read-only Cypher.",
             "GET /v1/schema": "Node labels, relationship types, and example queries.",
             "GET /llms.txt": "Usage guide: recipes, limits, and error recovery.",
-            "GET /health": "Liveness.",
-            "GET /ready": "Readiness. A 503 means the server-side cost bounds are unset OR the check could not reach Neo4j; in the first case /v1/query still works, in the second it does not.",
-            "GET /metrics": "In-flight gauge and request counters, plain text.",
         },
         "example_request": {
             "method": "POST",
@@ -260,7 +257,8 @@ async fn index_handler(State(state): State<AppState>) -> Json<serde_json::Value>
             format!(
                 "A query with no LIMIT returns up to {} rows; the ceiling is {}. Page past the ceiling \
                  with SKIP/LIMIT. `truncated` only fires when the gateway cut rows, so a query whose own \
-                 LIMIT returns exactly that many rows is not flagged: reconcile against a count().",
+                 LIMIT returns exactly that many rows is not flagged as truncated; `notes` says so \
+                 instead, and a count() is the way to the true total.",
                 limits.default_limit, limits.max_result_rows
             ),
             "Read-only: writes, CALL, and admin clauses are rejected. Errors carry a machine-readable \

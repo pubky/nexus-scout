@@ -67,20 +67,31 @@ MATCH (u:User {id: $id})-[:FOLLOWS]->(f:User)-[:FOLLOWS]->(u)
 RETURN count(DISTINCT f) AS friends
 ```
 
-Swap `count(DISTINCT f)` for `f.name AS name` plus `ORDER BY`/`SKIP`/`LIMIT` to list them. Run the
-count first: the list is capped (see Limits) and the count tells you whether you got all of them.
-Say which definition you used, since one-way follows give different numbers.
+Swap `count(DISTINCT f)` for `f.id AS id, f.name AS name` plus `ORDER BY f.id`/`SKIP`/`LIMIT` to list
+them. Run the count first: the list is capped (see Limits) and the count tells you whether you got all
+of them. Say which definition you used, since one-way follows give different numbers.
 
-**Someone's most-used tag.** `TAGGED` points at both posts and users, and the answer can change
-depending on which you count, so split it when it matters:
+**Someone's most-used tag.** Start with the combined ranking, which is the answer to the question as
+usually asked:
 
 ```cypher
 MATCH (u:User {id: $id})-[t:TAGGED]->(x)
-RETURN t.label AS tag, count(*) AS uses, labels(x)[0] AS target
+RETURN t.label AS tag, count(*) AS uses
 ORDER BY uses DESC LIMIT 20
 ```
 
-Drop `labels(x)[0]` for a combined ranking. Add `WHERE x:Post` to count only post tags.
+Then check whether the split changes it, because `TAGGED` points at both posts and users and the
+winner really can flip:
+
+```cypher
+MATCH (u:User {id: $id})-[t:TAGGED]->(x)
+RETURN t.label AS tag, labels(x)[0] AS target, count(*) AS uses
+ORDER BY uses DESC LIMIT 20
+```
+
+A label used heavily on both posts and people can top the combined ranking while a posts-only label
+tops the split one. Report the combined number and mention the split when they disagree. Add
+`WHERE x:Post` to count post tags alone.
 
 **Trending tags.**
 
@@ -118,7 +129,7 @@ Parameters go in `params`:
 curl -s https://nexus-scout.pubky.org/v1/query \
   -H 'content-type: application/json' \
   -d '{"cypher":"MATCH (u:User {id: $id})-[:FOLLOWS]->(f)-[:FOLLOWS]->(u) RETURN count(DISTINCT f) AS friends",
-       "params":{"id":"gujx6qd8ksydh1makdphd3bxu351d9b8waqka8hfg6q7hnqkxexo"}}'
+       "params":{"id":"ihaqcthsdbk751sxctk849bdr7yz7a934qen5gmpcbwcur49i97y"}}'
 ```
 
 ## Limits and paging
@@ -128,23 +139,26 @@ curl -s https://nexus-scout.pubky.org/v1/query \
 saying it was capped. Fewer matching rows come back untouched and unflagged.
 
 **`truncated` does not mean "there is more".** It fires only when the *gateway* cut rows. If your own
-`LIMIT 50` returns 50 rows, Neo4j did the cutting and `truncated` stays `false`, even though more
-rows exist. So never treat a full page as the complete answer. Always get the total separately:
+`LIMIT 50` returns 50 rows, Neo4j did the cutting, the gateway never saw a 51st row, and `truncated`
+stays `false` even though more rows exist. When that happens you get a `notes` entry saying the page
+exactly filled your limit, but treat any full page as suspect and get the total separately:
 
 ```cypher
 MATCH (u:User {id: $id})-[:FOLLOWS]->(f:User)-[:FOLLOWS]->(u)
 RETURN count(DISTINCT f) AS total
 ```
 
-then page with `SKIP` until you have that many:
+then page with `SKIP` until you have that many. **Order by `id`, never by `name`:** display names are
+not unique here, and duplicates straddling a page boundary silently drop or repeat rows.
 
 ```cypher
 MATCH (u:User {id: $id})-[:FOLLOWS]->(f:User)-[:FOLLOWS]->(u)
-RETURN f.name AS name ORDER BY name SKIP 100 LIMIT 100
+RETURN f.id AS id, f.name AS name ORDER BY f.id SKIP 100 LIMIT 100
 ```
 
-Getting this wrong is the most common way to report a confidently wrong number. If the count says 134
-and your list has 100, you are missing 34.
+Getting this wrong is the most common way to report a confidently wrong number: if the count says
+N and your list has 100, you are missing N-100. Check the page count against the count query before
+you answer.
 
 Other bounds:
 

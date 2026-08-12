@@ -252,9 +252,14 @@ impl Executor {
                 }
                 // Name the cap that actually fired. Blaming the row budget for a
                 // byte-cap cut sends the caller paging for rows that will never come.
-                response
-                    .notes
-                    .extend(truncation_note(truncation, budget_source, &self.inner.limits));
+                let count = response.count;
+                response.notes.extend(result_note(
+                    truncation,
+                    budget_source,
+                    budget,
+                    count,
+                    &self.inner.limits,
+                ));
                 Ok(response)
             }
             Ok(Err(e)) => {
@@ -356,15 +361,30 @@ async fn rollback_quietly(txn: neo4rs::Txn) {
 /// the capped count as the real total.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum BudgetSource {
-    /// The caller's own limit was honored as written; `truncated` says the rest.
-    AsRequested,
-    /// Nothing asked for a limit, so the default applied.
+    /// The query's own `LIMIT n` set the budget, so *Neo4j* ends the stream. The
+    /// gateway therefore never sees an n+1'th row and cannot tell a complete answer
+    /// from a page, which is why a full page under this source needs saying.
+    QueryLimit,
+    /// The request's `limit` field set the budget, so the *gateway* does the cutting
+    /// and a further row would have been seen. A full page here really is complete.
+    Requested,
+    /// Nothing asked for a limit, so the default applied. The gateway does the
+    /// cutting, so the same completeness reasoning as [`Self::Requested`] holds.
     Default,
     /// The limit asked for exceeded `max_result_rows` and was cut to it.
     Capped(u32),
     /// `LIMIT $n`, whose value is bound at execution and unknown here. The read runs
     /// to the ceiling; if the ceiling stops it, the gateway did the cutting.
     Ceiling,
+}
+
+impl BudgetSource {
+    /// Whether a result that exactly fills the budget is ambiguous. True only when
+    /// a server-side `LIMIT` ended the stream, since then "exactly the limit" and
+    /// "everything there is" are indistinguishable from here.
+    const fn full_page_is_ambiguous(self) -> bool {
+        matches!(self, Self::QueryLimit | Self::Ceiling)
+    }
 }
 
 /// The number of rows to read, capped at `max_result_rows`, and why. An explicit
@@ -375,9 +395,9 @@ pub(crate) enum BudgetSource {
 /// default.
 fn row_budget(limits: &Limits, requested: Option<u32>, query_limit: ResultLimit) -> (usize, BudgetSource) {
     let (asked, source) = match requested {
-        Some(r) => (r, BudgetSource::AsRequested),
+        Some(r) => (r, BudgetSource::Requested),
         None => match query_limit {
-            ResultLimit::Fixed(n) => (n, BudgetSource::AsRequested),
+            ResultLimit::Fixed(n) => (n, BudgetSource::QueryLimit),
             ResultLimit::Dynamic => (limits.max_result_rows, BudgetSource::Ceiling),
             ResultLimit::None => (limits.default_limit, BudgetSource::Default),
         },
@@ -385,19 +405,39 @@ fn row_budget(limits: &Limits, requested: Option<u32>, query_limit: ResultLimit)
     // An over-large ask from the caller is a cap worth naming. A `default_limit`
     // misconfigured above the ceiling is not the caller's doing, so that case keeps
     // reporting "no LIMIT" rather than quoting a limit they never wrote.
-    let source = if asked > limits.max_result_rows && matches!(source, BudgetSource::AsRequested) {
-        BudgetSource::Capped(asked)
-    } else {
-        source
-    };
+    let source =
+        if asked > limits.max_result_rows && matches!(source, BudgetSource::Requested | BudgetSource::QueryLimit) {
+            BudgetSource::Capped(asked)
+        } else {
+            source
+        };
     (asked.min(limits.max_result_rows) as usize, source)
 }
 
-/// The disclosure note for a cut result, or `None` when nothing was cut or the
-/// caller already knows why (it got exactly the limit it asked for). Numbers come
-/// from `limits`, which is env-configurable, so they are never hardcoded.
-fn truncation_note(truncation: Option<Truncation>, source: BudgetSource, limits: &Limits) -> Option<String> {
-    match truncation? {
+/// The disclosure note for a shaped result, or `None` when there is nothing the
+/// caller could misread. Numbers come from `limits`, which is env-configurable, so
+/// they are never hardcoded.
+fn result_note(
+    truncation: Option<Truncation>,
+    source: BudgetSource,
+    budget: usize,
+    returned: usize,
+    limits: &Limits,
+) -> Option<String> {
+    let Some(truncation) = truncation else {
+        // Nothing was cut. But when a server-side LIMIT ended the stream, a page that
+        // exactly fills the budget is indistinguishable on the wire from a complete
+        // answer: `truncated` stays false because the gateway never saw a further row.
+        // That shape reads as "this is all of them" and is the single easiest way to
+        // report a confidently wrong total, so it gets said out loud.
+        return (source.full_page_is_ambiguous() && returned > 0 && returned == budget).then(|| {
+            format!(
+                "returned exactly the {returned}-row limit, so there may be more; \
+                 re-run with SKIP {returned}, or compare against a count() to get the true total"
+            )
+        });
+    };
+    match truncation {
         // Paging is the wrong advice here: the rows themselves are too big, so the
         // next page is cut the same way. Narrowing the RETURN is the fix.
         Truncation::ByteCap => Some(format!(
@@ -406,7 +446,7 @@ fn truncation_note(truncation: Option<Truncation>, source: BudgetSource, limits:
             limits.max_result_bytes / 1024
         )),
         Truncation::RowBudget => match source {
-            BudgetSource::AsRequested => None,
+            BudgetSource::QueryLimit | BudgetSource::Requested => None,
             BudgetSource::Default => Some(format!(
                 "no LIMIT in the query, so the default of {} rows applied (maximum {}); \
                  add a LIMIT, or page with SKIP, to read further",
@@ -441,11 +481,13 @@ mod tests {
 
         // No limit anywhere: the default applies and says so.
         assert_eq!(budget(None, ResultLimit::None), (25, BudgetSource::Default));
-        // The query's own limit is honored untouched, so there is nothing to disclose.
-        assert_eq!(budget(None, ResultLimit::Fixed(50)), (50, BudgetSource::AsRequested));
-        assert_eq!(budget(Some(10), ResultLimit::None), (10, BudgetSource::AsRequested));
+        // The query's own LIMIT and the request's `limit` field are tracked apart:
+        // only the former lets Neo4j end the stream, which changes what a full page
+        // can be trusted to mean.
+        assert_eq!(budget(None, ResultLimit::Fixed(50)), (50, BudgetSource::QueryLimit));
+        assert_eq!(budget(Some(10), ResultLimit::None), (10, BudgetSource::Requested));
         // Exactly at the ceiling is honored, not "capped".
-        assert_eq!(budget(None, ResultLimit::Fixed(100)), (100, BudgetSource::AsRequested));
+        assert_eq!(budget(None, ResultLimit::Fixed(100)), (100, BudgetSource::QueryLimit));
         // Over the ceiling: cut, and the original ask is kept for the note.
         assert_eq!(budget(None, ResultLimit::Fixed(500)), (100, BudgetSource::Capped(500)));
         assert_eq!(
@@ -470,15 +512,35 @@ mod tests {
     }
 
     #[test]
+    fn a_full_page_says_so_only_when_it_could_be_hiding_more() {
+        let l = Limits::default();
+        // Nothing cut, and the page exactly fills the budget.
+        let full = |s, budget| result_note(None, s, budget, budget, &l);
+
+        // Neo4j's LIMIT ended the stream, so "exactly 50" and "all of them" look the
+        // same from here. This is the case that turned 134 friends into 100.
+        let q = full(BudgetSource::QueryLimit, 50).expect("ambiguous, must be disclosed");
+        assert!(q.contains("50") && q.contains("SKIP") && q.contains("count()"), "{q}");
+        assert!(full(BudgetSource::Ceiling, 100).is_some());
+
+        // The gateway did the cutting, so it would have seen a further row. A full
+        // page here really is complete and must stay quiet, or every ordinary query
+        // gets a scary note.
+        assert!(full(BudgetSource::Default, 25).is_none());
+        assert!(full(BudgetSource::Requested, 10).is_none());
+
+        // Under budget is complete under any source; zero rows is not a "full page".
+        assert!(result_note(None, BudgetSource::QueryLimit, 50, 12, &l).is_none());
+        assert!(result_note(None, BudgetSource::QueryLimit, 50, 0, &l).is_none());
+    }
+
+    #[test]
     fn truncation_note_names_the_cap_that_actually_fired() {
         let l = Limits::default();
-        let note = |t, s| truncation_note(t, s, &l);
+        let note = |t, s| result_note(t, s, 100, 100, &l);
 
-        // Nothing was cut: nothing to say, whatever the budget rule was.
-        assert!(note(None, BudgetSource::Default).is_none());
-        assert!(note(None, BudgetSource::Capped(500)).is_none());
         // Row budget, but the caller got exactly the limit it asked for.
-        assert!(note(Some(Truncation::RowBudget), BudgetSource::AsRequested).is_none());
+        assert!(note(Some(Truncation::RowBudget), BudgetSource::Requested).is_none());
 
         let default = note(Some(Truncation::RowBudget), BudgetSource::Default).expect("worth disclosing");
         assert!(default.contains("25") && default.contains("100"), "{default}");
