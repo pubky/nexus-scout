@@ -40,19 +40,31 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - uses: taiki-e/install-action@nextest
-      - name: Wait for Neo4j
+      - name: Wait for Neo4j and provision the read-only user
+        # Readiness must be an authenticated Bolt query, not a port probe: `nc -z` on
+        # the published port succeeds the instant Docker binds its proxy, seconds
+        # before Neo4j accepts Bolt, so the old check returned on its first attempt
+        # and the provisioning step raced it to "Connection refused".
+        #
+        # The reader role's GRANT/DENY lines are Enterprise-only and error on
+        # Community (no RBAC), so CI only creates the user. The integration suite is
+        # edition-aware and asserts the Community reality (sanitizer is the sole
+        # write guard); see docs/adr/0002-defense-in-depth.md.
         run: |
-          for i in $(seq 1 30); do
-            nc -z 127.0.0.1 7687 && break
+          cid="$(docker ps -qf ancestor=neo4j:5.26-community)"
+          if [ -z "$cid" ]; then
+            echo "no neo4j service container found"; docker ps -a; exit 1
+          fi
+          for i in $(seq 1 60); do
+            if docker exec -i "$cid" cypher-shell -u neo4j -p testtest12 "RETURN 1" >/dev/null 2>&1; then
+              echo "Neo4j accepted Bolt after $i attempt(s)"
+              break
+            fi
+            if [ "$i" -eq 60 ]; then
+              echo "Neo4j never accepted a Bolt connection:"; docker logs "$cid" | tail -50; exit 1
+            fi
             sleep 2
           done
-      - name: Provision read-only user
-        # The reader role's GRANT/DENY lines are Enterprise-only and error on
-        # Community (no RBAC), so CI only creates the user. The integration suite
-        # is edition-aware and asserts the Community reality (sanitizer is the
-        # sole write guard); see docs/adr/0002-defense-in-depth.md.
-        run: |
-          docker exec -i "$(docker ps -qf ancestor=neo4j:5.26-community)" \
-            cypher-shell -u neo4j -p testtest12 \
+          docker exec -i "$cid" cypher-shell -u neo4j -p testtest12 \
             "CREATE USER nexus_scout_reader IF NOT EXISTS SET PASSWORD 'change-me-in-production' SET PASSWORD CHANGE NOT REQUIRED;"
       - run: cargo nextest run -p nexus-scout --features integration,http
