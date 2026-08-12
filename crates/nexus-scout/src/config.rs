@@ -172,6 +172,11 @@ pub struct Config {
     /// Address the public HTTP gateway binds to. Default `127.0.0.1:8080` (not
     /// directly public); set `HTTP_ADDR=0.0.0.0:8080` behind a reverse proxy.
     pub http_bind: SocketAddr,
+    /// Address the operational endpoints (`/health`, `/ready`, `/metrics`) bind
+    /// to, on a listener separate from the public gateway so probes and metrics
+    /// stay off the public surface. Default `127.0.0.1:9090`; set
+    /// `METRICS_ADDR=0.0.0.0:9090` to reach it from another container.
+    pub metrics_bind: SocketAddr,
     /// HTTP-transport denial-of-service limits.
     pub http_limits: HttpLimits,
     /// Deployment profile (fail-closed in production).
@@ -248,6 +253,7 @@ impl Default for ConfigBuilder {
             query_timeout: Duration::from_secs(10),
             limits: Limits::default(),
             http_bind: SocketAddr::from(([127, 0, 0, 1], 8080)),
+            metrics_bind: SocketAddr::from(([127, 0, 0, 1], 9090)),
             http_limits: HttpLimits::default(),
             profile: Profile::default(),
             allow_insecure_transport: false,
@@ -315,6 +321,7 @@ impl ConfigBuilder {
             http.request_timeout = Duration::from_millis(ms);
         }
         parse_env_into("HTTP_ADDR", &mut self.0.http_bind)?;
+        parse_env_into("METRICS_ADDR", &mut self.0.metrics_bind)?;
         parse_env_into("NEXUS_SCOUT_PROFILE", &mut self.0.profile)?;
         parse_env_into("NEO4J_ALLOW_INSECURE_TRANSPORT", &mut self.0.allow_insecure_transport)?;
         Ok(self)
@@ -390,6 +397,9 @@ mod tests {
         // admits more than the pool can serve.
         assert_eq!(cfg.neo4j_max_connections, cfg.http_limits.max_concurrency);
         assert_eq!(cfg.neo4j_max_connections, 64);
+        // The operational endpoints bind to a separate loopback port by default.
+        assert_eq!(cfg.http_bind.to_string(), "127.0.0.1:8080");
+        assert_eq!(cfg.metrics_bind.to_string(), "127.0.0.1:9090");
     }
 
     #[test]
@@ -439,6 +449,10 @@ mod tests {
 
         let h = HttpLimits::default();
         assert_eq!(value_of("HTTP_ADDR"), Config::builder().build().http_bind.to_string());
+        assert_eq!(
+            value_of("METRICS_ADDR"),
+            Config::builder().build().metrics_bind.to_string()
+        );
         assert_eq!(value_of("HTTP_MAX_BODY_BYTES"), h.max_body_bytes.to_string());
         assert_eq!(value_of("HTTP_MAX_CONCURRENCY"), h.max_concurrency.to_string());
         assert_eq!(value_of("HTTP_MAX_RPS"), h.max_rps.to_string());

@@ -29,14 +29,26 @@ async fn admin_graph() -> Graph {
     .expect("admin connection")
 }
 
+/// The public gateway router (`/v1/query`, `/v1/schema`, ...). The operational
+/// probes live on a separate router; see [`operational_router`].
 async fn gateway_router() -> Router {
+    connect().await.0
+}
+
+/// The operational router (`/health`, `/ready`, `/metrics`), served on its own
+/// port in production but driven here over the same in-process `oneshot`.
+async fn operational_router() -> Router {
+    connect().await.1
+}
+
+async fn connect() -> (Router, Router) {
     let config = Config::builder()
         .neo4j_uri(uri())
         .neo4j_user(env_or("NEO4J_USER", "nexus_scout_reader"))
         .neo4j_password(env_or("NEO4J_PASSWORD", "change-me-in-production"))
         .build();
     let scout = Scout::connect(config).await.expect("gateway connects");
-    nexus_scout::http_router(scout, HttpLimits::default())
+    nexus_scout::http_routers(scout, HttpLimits::default())
 }
 
 async fn seed(admin: &Graph) {
@@ -110,22 +122,28 @@ async fn happy_path_query_returns_results() {
 
 #[tokio::test]
 async fn schema_health_and_ready_endpoints() {
-    let router = gateway_router().await;
-
-    let (s_status, schema) = send(&router, "GET", "/v1/schema", None).await;
+    let (s_status, schema) = send(&gateway_router().await, "GET", "/v1/schema", None).await;
     assert_eq!(s_status, StatusCode::OK);
     assert!(schema["nodes"].is_array());
 
-    let (h_status, _) = send(&router, "GET", "/health", None).await;
+    // Liveness, readiness, and metrics live on the operational router (a separate
+    // port in production), not on the public gateway.
+    let ops = operational_router().await;
+
+    let (h_status, _) = send(&ops, "GET", "/health", None).await;
     assert_eq!(h_status, StatusCode::OK);
 
     // Readiness reflects whether the server-side bounds are set: 200 if all are
     // configured, 503 otherwise. Both are valid; assert it answers cleanly.
-    let (r_status, _) = send(&router, "GET", "/ready", None).await;
+    let (r_status, _) = send(&ops, "GET", "/ready", None).await;
     assert!(
         r_status == StatusCode::OK || r_status == StatusCode::SERVICE_UNAVAILABLE,
         "unexpected /ready status: {r_status}"
     );
+
+    // The operational probes are not reachable on the public gateway.
+    let (gone, _) = send(&gateway_router().await, "GET", "/health", None).await;
+    assert_eq!(gone, StatusCode::NOT_FOUND, "/health must not be on the public port");
 }
 
 #[tokio::test]

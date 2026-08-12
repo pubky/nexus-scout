@@ -4,6 +4,7 @@
 //! shedding excess as 429), a whole-request timeout, panic isolation, and a
 //! startup/readiness cost-bound gate. TLS is terminated by a reverse proxy.
 
+use std::future::IntoFuture;
 use std::sync::atomic::{AtomicI64, AtomicU64, Ordering::Relaxed};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
@@ -40,6 +41,7 @@ use crate::{BoundsOutcome, Scout, COST_BOUNDS_HINT};
 /// listener/serve loop fails.
 pub async fn serve_http(config: Config) -> Result<(), Error> {
     let bind = config.http_bind;
+    let metrics_bind = config.metrics_bind;
     let limits = config.http_limits;
     // Fail closed in production (warn in development) if admission would admit more
     // requests than the Neo4j pool can serve.
@@ -56,26 +58,39 @@ pub async fn serve_http(config: Config) -> Result<(), Error> {
 
     scout.ensure_cost_bounds().await?;
 
-    let app = router(scout, limits);
+    // One shared state so the metrics listener reports the same counters the public
+    // gateway increments.
+    let state = AppState::new(scout, limits);
+    let public = public_router(state.clone());
+    let metrics = metrics_router(state);
+
     let listener = tokio::net::TcpListener::bind(bind).await.map_err(Error::internal)?;
-    tracing::info!(%bind, "nexus-scout HTTP gateway listening");
-    axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown_signal())
+    let metrics_listener = tokio::net::TcpListener::bind(metrics_bind)
         .await
         .map_err(Error::internal)?;
+    tracing::info!(%bind, "nexus-scout HTTP gateway listening");
+    tracing::info!(%metrics_bind, "nexus-scout operational endpoints (/health, /ready, /metrics) listening");
+
+    let serve_public = axum::serve(listener, public).with_graceful_shutdown(shutdown_signal());
+    let serve_metrics = axum::serve(metrics_listener, metrics).with_graceful_shutdown(shutdown_signal());
+    tokio::try_join!(serve_public.into_future(), serve_metrics.into_future()).map_err(Error::internal)?;
     Ok(())
 }
 
-/// Builds the application router. Separated from [`serve_http`] so tests can drive
-/// it with `oneshot`; doc-hidden, not a stable API.
+/// Builds the public and operational routers over one shared [`AppState`].
+/// Separated from [`serve_http`] so tests can drive each with `oneshot`;
+/// doc-hidden, not a stable API. The two share state so `/metrics` on the second
+/// router reports the counters the public router increments.
 #[doc(hidden)]
-pub fn router(scout: Scout, limits: HttpLimits) -> Router {
-    let state = AppState {
-        scout,
-        limits,
-        shared: Arc::new(Shared::new(limits.max_rps)),
-    };
+pub fn routers(scout: Scout, limits: HttpLimits) -> (Router, Router) {
+    let state = AppState::new(scout, limits);
+    (public_router(state.clone()), metrics_router(state))
+}
 
+/// The public gateway: `/v1/query` and the self-describing/schema routes. The
+/// operational probes live on [`metrics_router`], bound to a separate port.
+fn public_router(state: AppState) -> Router {
+    let limits = state.limits;
     // Cost controls apply to /v1/query only; probes and schema stay cheap and are never shed.
     // GET and POST are the same operation: a read-only query mutates nothing, so GET is
     // the honest verb, and some agents can issue nothing else.
@@ -89,9 +104,6 @@ pub fn router(scout: Scout, limits: HttpLimits) -> Router {
         .route("/", get(index_handler))
         .route("/llms.txt", get(llms_handler))
         .route("/v1/schema", get(schema_handler))
-        .route("/health", get(health_handler))
-        .route("/ready", get(ready_handler))
-        .route("/metrics", get(metrics_handler))
         .with_state(state)
         .layer(TimeoutLayer::with_status_code(
             StatusCode::GATEWAY_TIMEOUT,
@@ -103,12 +115,37 @@ pub fn router(scout: Scout, limits: HttpLimits) -> Router {
         .layer(SetRequestIdLayer::x_request_id(CounterRequestId::default()))
 }
 
+/// The operational endpoints, served on their own listener so liveness, readiness,
+/// and metrics stay off the public surface. Cheap and never shed; `/ready` keeps a
+/// timeout backstop for its Neo4j probe.
+fn metrics_router(state: AppState) -> Router {
+    let timeout = state.limits.request_timeout;
+    Router::new()
+        .route("/health", get(health_handler))
+        .route("/ready", get(ready_handler))
+        .route("/metrics", get(metrics_handler))
+        .with_state(state)
+        .layer(TimeoutLayer::with_status_code(StatusCode::GATEWAY_TIMEOUT, timeout))
+        .layer(TraceLayer::new_for_http())
+        .layer(CatchPanicLayer::new())
+}
+
 /// Shared, cloneable handler state.
 #[derive(Clone)]
 struct AppState {
     scout: Scout,
     limits: HttpLimits,
     shared: Arc<Shared>,
+}
+
+impl AppState {
+    fn new(scout: Scout, limits: HttpLimits) -> Self {
+        Self {
+            scout,
+            limits,
+            shared: Arc::new(Shared::new(limits.max_rps)),
+        }
+    }
 }
 
 /// Process-wide counters and the QPS bucket.

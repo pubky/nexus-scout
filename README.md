@@ -47,6 +47,11 @@ The public instance is `https://nexus-scout.pubky.app`. No account or API key.
 | `POST /v1/query` | Run a read-only query: body `{ "cypher": ..., "params"?: {…}, "limit"?: n }`. |
 | `GET /v1/query` | The same operation via query string (`?cypher=…&params=…&limit=…`), for callers that cannot send a body. Answers `Cache-Control: no-store`. |
 | `GET /v1/schema` | The curated graph schema. |
+
+The operational endpoints below are served on a **separate listener** (`METRICS_ADDR`, default `127.0.0.1:9090`) so probes and metrics stay off the public gateway. Keep this port internal - never front it with the reverse proxy.
+
+| Method + path | Purpose |
+|---------------|---------|
 | `GET /health` | Liveness (process up). |
 | `GET /ready` | Readiness: Neo4j reachable **and** the server-side cost bounds are set, else `503`. |
 | `GET /metrics` | In-flight gauge + request/shed counters (plain text). |
