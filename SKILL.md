@@ -237,10 +237,6 @@ Errors are `{"error": CODE, "message": ..., "hint": ...}`. The `hint` names the 
 Not every failure uses that envelope: an oversized body (413) and a request timeout (504) are
 answered by the outer HTTP layers as plain text, so check the status before parsing JSON.
 
-A 503 from `/ready` means either the server-side cost bounds are unset or the readiness check could
-not reach Neo4j. In the first case `/v1/query` still answers normally; in the second it does not, so
-try a query rather than assuming either way.
-
 ## The CLI (optional)
 
 `scout` wraps the same HTTP API with exit codes for scripting. **curl is enough and needs no

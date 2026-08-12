@@ -37,7 +37,7 @@ pub use config::{Config, ConfigBuilder, HttpLimits, Limits, Profile, Secret};
 pub use error::{Error, ErrorCode};
 #[cfg(feature = "http")]
 #[doc(hidden)]
-pub use http::router as http_router;
+pub use http::routers as http_routers;
 #[cfg(feature = "http")]
 #[doc(inline)]
 pub use http::serve_http;

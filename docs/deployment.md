@@ -82,13 +82,15 @@ private network.
 - [ ] `NEXUS_SCOUT_PROFILE=production` (fail-closed on unset/unverifiable cost bounds and on plaintext
       remote Bolt unless `NEO4J_ALLOW_INSECURE_TRANSPORT=true` for a private-network DB).
 - [ ] All three Neo4j cost bounds set; `/ready` returns 200.
-- [ ] Neither `nexus-scout` nor `neo4j` publishes a host port — only Caddy does.
+- [ ] Neither `nexus-scout` nor `neo4j` publishes a host port — only Caddy does. The operational
+      port (`METRICS_ADDR`, default `9090`) stays on the private network and is never fronted by Caddy.
 - [ ] Running against an **isolated, nightly-recloned Neo4j replica** (Community: the sanitizer is the
       sole write guard; isolation is what protects the primary).
 - [ ] Caddy per-IP `rate_limit` enabled.
 - [ ] `NEO4J_SCOUT_PASSWORD` / `NEO4J_ADMIN_PASSWORD` set to strong values; treat the box as holding a
       database credential and prefer Docker secrets over inline env where possible.
-- [ ] Watch `GET /metrics` (in-flight, shed, 5xx) and the slow-query `WARN` logs for abuse.
+- [ ] Watch `GET /metrics` on the internal operational port (`METRICS_ADDR`, default `9090`) for
+      in-flight, shed, and 5xx counts, plus the slow-query `WARN` logs, for abuse.
 
 ## Tuning
 

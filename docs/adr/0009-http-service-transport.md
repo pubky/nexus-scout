@@ -14,7 +14,9 @@ availability under anonymous load.
 ## Decision
 
 Add an Axum HTTP server as an additive `http` feature on `nexus-scout`, exposing `POST /v1/query`,
-`GET /v1/schema`, `GET /`, `GET /llms.txt`, `GET /health`, `GET /ready`, and `GET /metrics` over the
+`GET /v1/schema`, `GET /`, and `GET /llms.txt` on the public gateway, plus the operational
+`GET /health`, `GET /ready`, and `GET /metrics` on a **separate listener** (`METRICS_ADDR`, default
+loopback `127.0.0.1:9090`) so probes and metrics stay off the public surface - all over the
 shared `Scout` core, so
 the sanitizer enforces read-only at the HTTP boundary exactly as on the CLI/MCP paths. The CLI becomes
 a separate, credential-free `scout` client crate, and the wire contract (DTOs + the `code → HTTP
@@ -32,7 +34,8 @@ For a public, unauthenticated v1:
   gateway verifies at readiness (`/ready` → `503` until set) and, under
   `NEXUS_SCOUT_PROFILE=production`, **refuses to start** without.
 - **Topology**: TLS terminates at Caddy; the gateway binds plain HTTP (default loopback) and is never
-  publicly published; Neo4j is private. Credentials live only in the service.
+  publicly published; the operational endpoints bind a second loopback port (`METRICS_ADDR`) that Caddy
+  never fronts; Neo4j is private. Credentials live only in the service.
 
 ## Consequences
 

@@ -99,8 +99,9 @@ For visibility — these came out of the same audit but are **code/CI**, not inf
 and are not asking anything of the DevOps team:
 
 - **F5:** lengthen and PR-trigger the sanitizer fuzz job (`.github/workflows/fuzz.yml`).
-- **F6:** cache `/ready`'s `SHOW SETTINGS` call and keep `/ready` + `/metrics` off the
-  public proxy.
+- **F6:** cache `/ready`'s `SHOW SETTINGS` call. Keeping `/ready` + `/metrics` off the
+  public proxy is now structural: the operational endpoints bind a separate port
+  (`METRICS_ADDR`, default loopback) that Caddy never fronts.
 - **F8:** refresh the audit docs / error-reason text.
 
 The application-code gaps from the audit (quantified-path cost guard, connection-pool
