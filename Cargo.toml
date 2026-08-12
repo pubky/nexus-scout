@@ -22,7 +22,8 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 neo4rs = "=0.8.0"
 # HTTP server tier (behind the `http` feature).
-axum = { version = "0.8", default-features = false, features = ["http1", "json", "tokio"] }
+# `query` powers the GET form of /v1/query, for callers that cannot send a body.
+axum = { version = "0.8", default-features = false, features = ["http1", "json", "query", "tokio"] }
 # `util` provides ServiceExt::oneshot for DB-free handler tests.
 tower = { version = "0.5", features = ["util"] }
 tower-http = { version = "0.6", features = ["limit", "trace", "catch-panic", "request-id", "timeout"] }
