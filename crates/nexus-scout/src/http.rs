@@ -64,7 +64,9 @@ pub async fn serve_http(config: Config) -> Result<(), Error> {
     let metrics = metrics_router(state);
 
     let listener = tokio::net::TcpListener::bind(bind).await.map_err(Error::internal)?;
-    let metrics_listener = tokio::net::TcpListener::bind(metrics_bind).await.map_err(Error::internal)?;
+    let metrics_listener = tokio::net::TcpListener::bind(metrics_bind)
+        .await
+        .map_err(Error::internal)?;
     tracing::info!(%bind, "nexus-scout HTTP gateway listening");
     tracing::info!(%metrics_bind, "nexus-scout operational endpoints (/health, /ready, /metrics) listening");
 

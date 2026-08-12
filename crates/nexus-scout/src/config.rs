@@ -449,7 +449,10 @@ mod tests {
 
         let h = HttpLimits::default();
         assert_eq!(value_of("HTTP_ADDR"), Config::builder().build().http_bind.to_string());
-        assert_eq!(value_of("METRICS_ADDR"), Config::builder().build().metrics_bind.to_string());
+        assert_eq!(
+            value_of("METRICS_ADDR"),
+            Config::builder().build().metrics_bind.to_string()
+        );
         assert_eq!(value_of("HTTP_MAX_BODY_BYTES"), h.max_body_bytes.to_string());
         assert_eq!(value_of("HTTP_MAX_CONCURRENCY"), h.max_concurrency.to_string());
         assert_eq!(value_of("HTTP_MAX_RPS"), h.max_rps.to_string());
