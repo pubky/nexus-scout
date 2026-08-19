@@ -14,15 +14,22 @@ replacement for the Nexus REST API.
 
 The public instance is `https://nexus-scout.pubky.app`. No account, no API key.
 
+The quickest way to use it is to hand the URL to your AI agent:
+
+> Use https://nexus-scout.pubky.app and tell me how many friends John Carvalho has, and which
+> tag he used the most.
+
+The agent reads `https://nexus-scout.pubky.app/llms.txt` (the full usage guide: endpoints, result
+shapes, error codes, query patterns), writes its own Cypher, and answers. You can also query
+directly:
+
 ```sh
 curl -s https://nexus-scout.pubky.app/v1/schema | jq .nodes
 curl -s -XPOST https://nexus-scout.pubky.app/v1/query -H 'content-type: application/json' \
   -d '{"cypher":"MATCH (u:User) RETURN u.name AS name LIMIT 5"}' | jq
 ```
 
-Agents should read `https://nexus-scout.pubky.app/llms.txt`: the full usage guide (endpoints,
-result shapes, error codes, query patterns). [`examples.md`](examples.md) walks through real
-question-to-Cypher sessions.
+[`examples.md`](examples.md) walks through real question-to-Cypher sessions.
 
 ## HTTP API
 
