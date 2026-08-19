@@ -220,7 +220,8 @@ Read-only is enforced by a sanitizer, not by convention:
 - `CREATE`, `MERGE`, `SET`, `DELETE`, `DETACH`, `REMOVE`, `DROP`, `FOREACH`, `LOAD`, and `INSERT` are
   rejected.
 - `CALL` is rejected in every form, both stored procedures and `CALL {}` subqueries. Bare functions
-  need no `CALL` and are fine: `count()`, `collect()`, `shortestPath()`, `labels()`, `type()`.
+  need no `CALL` and are fine: `count()`, `collect()`, `shortestPath()`, `labels()`, `type()`. Subquery
+  expressions are also allowed: `COUNT {}`, `EXISTS {}`, and `COLLECT {}`.
 - Namespaced calls (`apoc.*`, `db.*`, `dbms.*`, `gds.*`) are rejected.
 - Admin and selector clauses (`USE`, `SHOW`, `PROFILE`, `EXPLAIN`) are rejected.
 - **`USING` is rejected**, which catches read-only query hints (`USING INDEX`, `USING SCAN`,
