@@ -47,6 +47,9 @@ const FLOW_QUERIES: &[&str] = &[
         (me:User {id: $viewer})-[:FOLLOWS*..5]->(them:User {id: $target})
       )
       RETURN length(path) AS distance, [n IN nodes(path) | n.name] AS chain",
+    "MATCH (u:User) RETURN u.id, count { (u)-[:FOLLOWS]->(:User) } AS following LIMIT 3",
+    "MATCH (u:User) RETURN u.id, exists { MATCH (u)-[:AUTHORED]->(:Post) } AS has_posts LIMIT 3",
+    "MATCH (u:User) RETURN u.id, collect { MATCH (u)-[:AUTHORED]->(p:Post) RETURN p.id LIMIT 3 } AS post_ids LIMIT 3",
 ];
 
 fn assert_all_accepted(corpus: &[&str], what: &str) {

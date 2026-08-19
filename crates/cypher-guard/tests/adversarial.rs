@@ -31,6 +31,10 @@ const REJECT: &[(&str, RejectReason)] = &[
     ("INSERT (m:Evil) RETURN m", RejectReason::Mutation),
     ("MATCH (n) WITH n CREATE (m) RETURN m", RejectReason::Mutation),
     ("MATCH (n) NODETACH DELETE n", RejectReason::Mutation),
+    // Writes nested inside permitted subquery expressions must still be caught.
+    ("RETURN count { MATCH (n) DELETE n }", RejectReason::Mutation),
+    ("RETURN exists { MATCH (n) SET n.x = 1 }", RejectReason::Mutation),
+    ("RETURN collect { CREATE () RETURN 1 }", RejectReason::Mutation),
     // Holds both CALL and CREATE, CALL first. Reported as the CALL on purpose:
     // removing the CALL is the fix either way, so scan order does not pick the
     // message. Still rejected, which is what matters.
