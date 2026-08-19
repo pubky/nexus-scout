@@ -1,0 +1,24 @@
+# Public entrypoint for the nexus-scout gateway.
+#
+# Caddy terminates TLS (automatic Let's Encrypt for $SCOUT_DOMAIN) and forwards
+# plain HTTP to the gateway on the private Docker network. Because Caddy sees the
+# real client IP, per-IP rate limiting belongs here (no X-Forwarded-For trust is
+# needed).
+
+{$SCOUT_DOMAIN} {
+	# Per-IP rate limit. NOTE: `rate_limit` needs the caddy-ratelimit plugin,
+	# which the stock `caddy:2` image does not include. To enable it, build a
+	# custom image (`xcaddy build --with github.com/mholt/caddy-ratelimit`) and
+	# point the compose `caddy` service at it, then uncomment the block below.
+	# The gateway's own global QPS shed (HTTP_MAX_RPS) applies regardless.
+	#
+	# rate_limit {
+	# 	zone scout {
+	# 		key    {remote_host}
+	# 		events 60
+	# 		window 1m
+	# 	}
+	# }
+
+	reverse_proxy nexus-scout:8080
+}

@@ -1,0 +1,18 @@
+[package]
+name = "cypher-guard"
+version = "0.1.0"
+description = "Pure, read-only Cypher sanitizer: validates a query is side-effect free before execution."
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+unicode-normalization = { workspace = true }
+
+[dev-dependencies]
+proptest = "1"
+static_assertions = "1"
+
+[lints]
+workspace = true

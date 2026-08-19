@@ -1,0 +1,15 @@
+[package]
+name = "nexus-scout-types"
+version = "0.1.0"
+description = "Shared wire contract (DTOs + status/exit-code maps) for nexus-scout."
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[lints]
+workspace = true

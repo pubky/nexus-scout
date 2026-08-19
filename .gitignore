@@ -1,0 +1,8 @@
+/target
+**/*.rs.bk
+Cargo.lock.orig
+.env
+crates/cypher-guard/fuzz/target
+crates/cypher-guard/fuzz/corpus
+crates/cypher-guard/fuzz/artifacts
+crates/cypher-guard/fuzz-*.log
