@@ -226,7 +226,7 @@ impl Executor {
         let started = std::time::Instant::now();
 
         // One deadline across every DB phase (pool acquire + start, execute, drain),
-        // so the whole interaction respects the liveness budget — not just the drain.
+        // so the whole interaction respects the liveness budget, not just the drain.
         // txn/stream are owned out here so their borrows end before commit/rollback.
         let deadline = started + timeout_budget;
         let remaining = || deadline.saturating_duration_since(std::time::Instant::now());

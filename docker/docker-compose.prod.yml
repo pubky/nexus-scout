@@ -1,5 +1,5 @@
 # Production stack: the gateway and Neo4j co-located, fronted by a Caddy reverse
-# proxy that terminates TLS. ONLY Caddy is public — neither Neo4j nor the gateway
+# proxy that terminates TLS. ONLY Caddy is public; neither Neo4j nor the gateway
 # publishes a host port, so the Bolt port and DB credentials never leave the box.
 #
 # Set SCOUT_DOMAIN, NEO4J_ADMIN_PASSWORD and NEO4J_SCOUT_PASSWORD in a `.env` file

@@ -1,6 +1,6 @@
 //! Allow/deny policy tables and the pure classifier. Only keyword-position `Word`
-//! tokens are examined — string, comment, and backtick contents are never scanned
-//! — so keyword-looking data cannot trip a rule and a hidden keyword cannot slip
+//! tokens are examined; string, comment, and backtick contents are never scanned,
+//! so keyword-looking data cannot trip a rule and a hidden keyword cannot slip
 //! past one. A word is rejected only if it is an explicitly denied clause keyword;
 //! bare identifiers are allowed.
 
@@ -117,8 +117,8 @@ pub(crate) fn classify(tokens: &[Token], src: &str) -> Result<(), SanitizeError>
     Ok(())
 }
 
-/// Finds a quantified path pattern — a parenthesized group that contains a
-/// relationship and is immediately followed by a quantifier `+`, `*`, or `{` — and
+/// Finds a quantified path pattern, a parenthesized group that contains a
+/// relationship and is immediately followed by a quantifier `+`, `*`, or `{`, and
 /// returns its byte span. Requiring a relationship inside the parens distinguishes a
 /// real QPP from arithmetic like `(a + b) * 2` or `(x)*2` (no relationship → not a
 /// QPP). A relationship inside is a `-[` detail bracket or an `->`/`<-` arrow.

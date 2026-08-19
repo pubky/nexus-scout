@@ -4,7 +4,7 @@
 
 > **Update:** the workspace later split out `nexus-scout-types` (the shared wire
 > contract) and `nexus-scout-cli` (the client), so it is now **four** crates. The
-> core decision — a pure, dependency-light `cypher-guard` separate from the gateway —
+> core decision - a pure, dependency-light `cypher-guard` separate from the gateway -
 > stands; read "two crates" below as the original split.
 
 ## Context

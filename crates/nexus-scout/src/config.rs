@@ -196,7 +196,7 @@ impl Config {
 
     /// Checks that the HTTP concurrency cap does not exceed the Neo4j connection
     /// pool. When it does, admitted requests beyond the pool size stall on connection
-    /// acquire until they time out — an availability cliff under load. The production
+    /// acquire until they time out, an availability cliff under load. The production
     /// profile fails closed on this; development only warns (the caller logs it).
     ///
     /// # Errors

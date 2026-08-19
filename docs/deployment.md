@@ -8,9 +8,9 @@ host port, so the Bolt port and database credentials never leave the box.
 agents ──HTTPS──▶ Caddy (TLS, optional per-IP rate limit) ──HTTP, private──▶ nexus-scout ──bolt──▶ Neo4j
 ```
 
-> **Read before deploying — write protection.** This stack runs **Neo4j Community**, which has no
+> **Read before deploying - write protection.** This stack runs **Neo4j Community**, which has no
 > role-based access control, so the configured reader user *can write*: the **sanitizer is the sole
-> write guard**. Protection therefore rests on physical isolation — run the gateway against an
+> write guard**. Protection therefore rests on physical isolation - run the gateway against an
 > **isolated, disposable replica re-cloned nightly** (writes never reach the primary; intra-day
 > corruption is wiped on the next clone). Treat that isolation as a hard requirement, and re-run the
 > sanitizer audit + integration suite on every Neo4j minor-version bump (see
@@ -82,7 +82,7 @@ private network.
 - [ ] `NEXUS_SCOUT_PROFILE=production` (fail-closed on unset/unverifiable cost bounds and on plaintext
       remote Bolt unless `NEO4J_ALLOW_INSECURE_TRANSPORT=true` for a private-network DB).
 - [ ] All three Neo4j cost bounds set; `/ready` returns 200.
-- [ ] Neither `nexus-scout` nor `neo4j` publishes a host port — only Caddy does. The operational
+- [ ] Neither `nexus-scout` nor `neo4j` publishes a host port - only Caddy does. The operational
       port (`METRICS_ADDR`, default `9090`) stays on the private network and is never fronted by Caddy.
 - [ ] Running against an **isolated, nightly-recloned Neo4j replica** (Community: the sanitizer is the
       sole write guard; isolation is what protects the primary).

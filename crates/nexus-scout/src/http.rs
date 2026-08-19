@@ -193,7 +193,7 @@ async fn admit(State(state): State<AppState>, request: Request, next: Next) -> R
         return shed(shared);
     }
     // lock() poisons only if a holder panicked mid-mutation; the bucket has no
-    // invariant to corrupt, so recover the guard and still apply the limit — a
+    // invariant to corrupt, so recover the guard and still apply the limit, a
     // public limiter must never fail open. Scoped so the guard drops before the await.
     let allowed = {
         let mut bucket = state
@@ -249,7 +249,7 @@ struct QueryStringRequest {
     limit: Option<String>,
 }
 
-/// `GET /v1/query?cypher=...` — the same operation as the POST, for callers that
+/// `GET /v1/query?cypher=...`, the same operation as the POST, for callers that
 /// cannot send a request body. Read-only queries change nothing, so GET is the
 /// correct verb; several agent runtimes (browser-based fetchers, link-following
 /// tools) can issue no other method, and without this the service is unusable to

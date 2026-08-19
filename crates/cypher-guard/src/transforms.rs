@@ -1,6 +1,6 @@
 //! Variable-length path bounding: each well-formed `PathRange` whose upper bound is
 //! missing or over `max_path_depth` is rewritten bounded (`*` -> `*1..5`). A
-//! malformed range (e.g. `*1.2.3`) is left unchanged for Neo4j to reject — the
+//! malformed range (e.g. `*1.2.3`) is left unchanged for Neo4j to reject, the
 //! transform never turns invalid input into a valid bounded range. Edits splice
 //! only the offending token, applied right-to-left so earlier offsets stay valid.
 
@@ -33,7 +33,7 @@ pub(crate) fn bound_paths(src: &str, tokens: &[Token], max_depth: u32) -> (Strin
 }
 
 /// Given the text of a `PathRange` token (starting with `*`), returns a bounded
-/// replacement, or `None` to leave it unchanged — both when it is already within
+/// replacement, or `None` to leave it unchanged, both when it is already within
 /// `max_depth` and when it is malformed (left for Neo4j to reject, never rewritten
 /// into a valid range).
 fn rebound(text: &str, max_depth: u32) -> Option<String> {

@@ -4,8 +4,8 @@
 
 ## Context
 
-The spec assumed a driver-level per-query timeout (`transaction.run_with_timeout()`). It does not
-exist in `neo4rs` 0.8. Worse, `Graph::execute`/`run` wrap the query in a transient-error retry loop
+The obvious shape is a driver-level per-query timeout (`transaction.run_with_timeout()`). No such
+API exists in `neo4rs` 0.8. Worse, `Graph::execute`/`run` wrap the query in a transient-error retry loop
 with exponential backoff up to ~60 s, which would blow any liveness budget. Dropping a row stream
 does not reliably stop server-side work.
 

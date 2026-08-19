@@ -5,8 +5,8 @@
 ## Context
 
 The gateway must block 100% of mutation attempts, including obfuscated ones (mixed case, comments,
-semicolons, Unicode homoglyphs). The spec suggested a keyword scanner "is sufficient for the MVP", but
-a naive whitespace scanner is wrong in both directions: it rejects valid queries where a keyword
+semicolons, Unicode homoglyphs). A plain keyword scanner looks sufficient for an MVP, but a naive
+whitespace scanner is wrong in both directions: it rejects valid queries where a keyword
 appears inside a string literal (`WHERE n.bio CONTAINS 'please CREATE...'`), and it can be fooled into
 missing a keyword hidden by a comment or a broken string boundary.
 
@@ -28,7 +28,7 @@ We deliberately do **not** build a full Cypher grammar parser.
 
 - ✅ Keyword-in-string and comment-hidden-keyword attacks are structurally impossible.
 - ✅ Small, auditable, fuzzable surface; the lexer cannot blow up on adversarial input.
-- ✅ The spec's own §5.2/§7 example queries (including `shortestPath`, list comprehensions, map
+- ✅ Representative agent queries (including `shortestPath`, list comprehensions, map
   projections) pass, verified by a dedicated acceptance corpus.
 - ❌ A bare variable that *spells* a denied keyword (e.g. a node named `create`) is rejected. This is
   an accepted, documented, safe over-rejection: rare, and the agent can rename the variable.

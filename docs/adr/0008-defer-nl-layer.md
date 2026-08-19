@@ -4,8 +4,8 @@
 
 ## Context
 
-The spec describes an optional future `query_graph` tool that translates a natural-language question
-into Cypher with an LLM. The original request mentioned a "natural language parser."
+An optional future `query_graph` tool could translate a natural-language question into Cypher with
+an LLM; the original request mentioned a "natural language parser."
 
 ## Decision
 

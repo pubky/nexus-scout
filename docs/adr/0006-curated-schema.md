@@ -5,14 +5,13 @@
 ## Context
 
 Agents call `get_schema` once to learn the graph, then write Cypher. The schema must be stable,
-example-rich, and match the spec's wire shape (§5.2) - which is intentionally asymmetric: node
-properties are objects (`{type, description?, unique?}`) while relationship properties are bare type
-strings.
+example-rich, and keep its deliberately asymmetric wire shape: node properties are objects
+(`{type, description?, unique?}`) while relationship properties are bare type strings.
 
 ## Decision
 
 Ship the schema as a checked-in golden JSON file (`docs/schema.golden.json`) that the `schema()`
-function parses and serves; a contract test pins the served output to the golden and to the spec
+function parses and serves; a contract test pins the served output to the golden and to that wire
 shape, and asserts every example query passes the sanitizer.
 
 ## Consequences

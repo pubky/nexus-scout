@@ -275,7 +275,7 @@ pub(crate) fn lex(src: &str) -> Result<Vec<Token>, SanitizeError> {
 /// (`0x…`) or octal (`0o…`) literal, or a decimal/float with optional `.` fraction
 /// and `[eE]` exponent, with `_` digit separators allowed. Letters that are not part
 /// of the number are deliberately left for the next token, so a keyword glued to a
-/// number (`0CREATE`, `0xFFSET`) becomes a separate Word the classifier can reject —
+/// number (`0CREATE`, `0xFFSET`) becomes a separate Word the classifier can reject;
 /// it cannot hide inside the numeric span.
 fn scan_number(bytes: &[u8], start: usize) -> usize {
     let n = bytes.len();
@@ -345,7 +345,7 @@ mod tests {
     fn backtick_parameter_with_doubled_backtick_is_one_token() {
         // `$`a``b`` names a single parameter `a`b` (the `` is an escaped backtick).
         // The whole reference must lex as ONE Parameter token, matching how the
-        // BacktickIdent scanner and the unicode region scanner treat `` `` `` — not
+        // BacktickIdent scanner and the unicode region scanner treat `` `` ``, not
         // split at the first inner backtick.
         let src = "$`a``b`";
         assert_eq!(kinds(src), vec![(TokenKind::Parameter, "$`a``b`")]);

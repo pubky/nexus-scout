@@ -43,7 +43,7 @@ names the test.
 
 | Construct | Policy | Notes / proven by |
 |-----------|--------|-------------------|
-| `MATCH`, `OPTIONAL MATCH` | Allow | Read-entry. `accept_spec_queries.rs`, `adversarial.rs` ACCEPT |
+| `MATCH`, `OPTIONAL MATCH` | Allow | Read-entry. `accept_agent_queries.rs`, `adversarial.rs` ACCEPT |
 | `WHERE`, `RETURN`, `WITH`, `UNWIND` | Allow | `WITH`/`UNWIND`/`RETURN` are also valid read entries |
 | `ORDER BY`, `SKIP`, `LIMIT`, `DISTINCT` | Allow | Not in any deny table |
 | `UNION` / `UNION ALL` | Allow | `adversarial.rs` ACCEPT (`... UNION MATCH ...`) |
@@ -172,7 +172,7 @@ mistaken for guarantees.
 - [ ] Add a hand-written `adversarial.rs` REJECT case for each new clause with its
       expected reason.
 - [ ] Confirm no new read clause is wrongly rejected: add it to `READ_ENTRY` if it
-      can legally lead a query, and add an `accept_spec_queries.rs` ACCEPT case.
+      can legally lead a query, and add an `accept_agent_queries.rs` ACCEPT case.
 - [ ] Re-run the fuzz oracle for an extended budget against the new keyword set.
 - [ ] Bump the "Audited against" versions at the top of this file **and** the
       `AUDITED_NEO4J_IMAGE` constant in `crates/cypher-guard/tests/version_pinning.rs`
@@ -183,7 +183,7 @@ mistaken for guarantees.
 | Layer | Where |
 |-------|-------|
 | Deny/accept corpus | `crates/cypher-guard/tests/adversarial.rs` |
-| Spec query acceptance | `crates/cypher-guard/tests/accept_spec_queries.rs` |
+| Agent query acceptance | `crates/cypher-guard/tests/accept_agent_queries.rs` |
 | Deny-table enforcement | `crates/cypher-guard/tests/adversarial.rs::every_denied_keyword_is_enforced` |
 | Path bounding | `crates/cypher-guard/tests/transforms.rs` |
 | Invariants / no-hang | `crates/cypher-guard/tests/properties.rs` |

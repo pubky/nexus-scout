@@ -283,7 +283,7 @@ async fn reader_role_write_policy_matches_edition() {
 }
 
 /// Proves defense layer 1 (the sanitizer) end to end through `Scout::query`: each
-/// mutation must be rejected and leave the graph unchanged. Edition-independent —
+/// mutation must be rejected and leave the graph unchanged. Edition-independent:
 /// the sanitizer is the only write guard on Community.
 #[tokio::test]
 async fn gateway_rejects_writes_and_leaves_graph_unchanged() {
@@ -324,7 +324,7 @@ async fn gateway_rejects_writes_and_leaves_graph_unchanged() {
 /// present in the seeded fixture (via live `db.labels()` / `db.relationshipTypes()`);
 /// an omission would make an agent write Cypher against unadvertised structure. This
 /// guards the curated schema against the *fixture* topology, not the full production
-/// graph — broaden `seed` to widen the coverage.
+/// graph; broaden `seed` to widen the coverage.
 #[tokio::test]
 async fn curated_schema_covers_seeded_fixture_topology() {
     let admin = admin_graph().await;

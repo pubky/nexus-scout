@@ -1,4 +1,4 @@
-//! `scout` — a thin HTTP client for the nexus-scout gateway. Builds a request,
+//! `scout`, a thin HTTP client for the nexus-scout gateway. Builds a request,
 //! POSTs it, and prints the JSON response to stdout. The exit code is derived from
 //! the response via the shared [`nexus_scout_types`] contract.
 

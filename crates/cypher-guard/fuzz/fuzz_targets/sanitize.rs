@@ -20,8 +20,8 @@ fn run_is_denied(run: &str, denied: &[&str]) -> bool {
 
 /// Scans an accepted output for a guardrail violation *in code position* and returns
 /// its kind, or `None` if the output is clean. String literals (`'..'`/`"..."`) and
-/// backtick identifiers are opaque data — a `;`, comment, or keyword inside them is
-/// exactly as inert as Neo4j treats it — so they are skipped with the same escape
+/// backtick identifiers are opaque data, a `;`, comment, or keyword inside them is
+/// exactly as inert as Neo4j treats it, so they are skipped with the same escape
 /// rules the sanitizer's own lexer uses (`\` in strings, `` `` `` in backticks).
 /// Checking only code position is essential: a naive `out.contains(';')` would
 /// false-positive on `'a;b'`, and `out.contains("//")` on `'http://x'`.
@@ -57,7 +57,7 @@ fn code_position_violation(out: &str, denied: &[&str]) -> Option<&'static str> {
                     '$' => {
                         // Parameter reference ($name or $`name`): the name is data the
                         // driver binds, never a keyword Neo4j executes, so consume it
-                        // without classifying — `$revoke` must not read as REVOKE.
+                        // without classifying, `$revoke` must not read as REVOKE.
                         if chars.peek() == Some(&'`') {
                             chars.next();
                             while let Some(c2) = chars.next() {

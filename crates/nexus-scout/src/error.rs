@@ -125,10 +125,10 @@ impl Error {
                 "An environment variable has an invalid value (see the message and .env.example); correct it and restart."
             }
             Kind::ResourceExhausted => {
-                "The query needs more memory than the database allows. Reduce its scope — add a LIMIT, narrow the MATCH, or avoid large collect()/cartesian products; retrying it unchanged will not help."
+                "The query needs more memory than the database allows. Reduce its scope: add a LIMIT, narrow the MATCH, or avoid large collect()/cartesian products; retrying it unchanged will not help."
             }
             Kind::Internal => {
-                "An internal or transient error. Retry; if it persists, the query may be too expensive or malformed — revise it or report it."
+                "An internal or transient error. Retry; if it persists, the query may be too expensive or malformed; revise it or report it."
             }
         }
     }
@@ -140,8 +140,8 @@ impl Error {
     }
 
     /// Classifies a `neo4rs` driver error: a client *statement* error (the query
-    /// is the problem) maps to a query error (400); everything else — transient,
-    /// connection, or protocol failures — maps to internal (500).
+    /// is the problem) maps to a query error (400); everything else (transient,
+    /// connection, or protocol failures) maps to internal (500).
     pub(crate) fn from_neo4rs(e: neo4rs::Error) -> Self {
         // A client statement error is the agent's query, not a gateway fault, so it
         // is an actionable 400 rather than a 500 to blindly retry. A compile-time
@@ -174,7 +174,7 @@ impl Error {
 }
 
 /// Whether a Neo4j status code (or wrapped failure text) denotes exceeding a
-/// transaction memory/heap limit — e.g. `MemoryPoolOutOfMemoryError`.
+/// transaction memory/heap limit, e.g. `MemoryPoolOutOfMemoryError`.
 fn is_resource_exhaustion(text: &str) -> bool {
     text.contains("OutOfMemory") || text.contains("MemoryLimit")
 }
@@ -189,8 +189,8 @@ fn statement_error_detail(e: &neo4rs::Error) -> String {
     }
 }
 
-/// Neo4j status-code prefix for a client *statement* error — the agent's query is
-/// at fault (syntax, semantic, type, argument, …) — which maps to a 400, not a 500.
+/// Neo4j status-code prefix for a client *statement* error: the agent's query is
+/// at fault (syntax, semantic, type, argument, …), which maps to a 400, not a 500.
 const STATEMENT_ERROR_PREFIX: &str = "Neo.ClientError.Statement.";
 
 /// Whether a Neo4j status code is a client statement error (the query's fault).
@@ -283,7 +283,7 @@ mod tests {
 
     #[test]
     fn memory_limit_gets_a_shrink_the_query_hint_not_retry() {
-        // A memory-pool exhaustion (deterministic — retrying won't help) still maps to
+        // A memory-pool exhaustion (deterministic, retrying won't help) still maps to
         // a 500, but its hint must steer the caller to shrink the query, not retry.
         let oom = neo4rs::Error::UnexpectedMessage(
             "unexpected response for PULL: Ok(Failure(Failure { metadata: \
@@ -299,7 +299,7 @@ mod tests {
     #[test]
     fn statement_error_response_carries_a_message() {
         // The raw neo4rs UnexpectedMessage wrapper is not echoed; it falls back to
-        // the generic detail. (A real Neo4j(n) error surfaces n.message() — covered
+        // the generic detail. (A real Neo4j(n) error surfaces n.message(), covered
         // by the live integration suite.)
         let arith = neo4rs::Error::UnexpectedMessage(
             "unexpected response for PULL: Ok(Failure(Failure { metadata: \
