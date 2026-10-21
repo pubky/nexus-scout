@@ -187,14 +187,14 @@ scout query "MATCH (u:User)-[:FOLLOWS]-(a:User)
 ```
 ```json
 { "results": [
-  { "bridge": "stagy",          "contacts": 12, "hub_a": "Miguel Medeiros", "hub_b": "JohnDev" },
-  { "bridge": "BraveBrave…",    "contacts": 8,  "hub_a": "s0nG0ku",         "hub_b": "Pav" },
-  { "bridge": "Z32P-DXCK-9N2G", "contacts": 2,  "hub_a": "Miguel Medeiros", "hub_b": "moon rock" }
+  { "bridge": "stagy",          "contacts": 12, "hub_a": "Hub Alpha",       "hub_b": "JohnDev" },
+  { "bridge": "BraveBrave…",    "contacts": 8,  "hub_a": "s0nG0ku",         "hub_b": "Hub Beta" },
+  { "bridge": "Z32P-DXCK-9N2G", "contacts": 2,  "hub_a": "Hub Alpha",       "hub_b": "moon rock" }
 ], "count": 8, "truncated": false }
 ```
 
 **Step 4 - the answer.** Concrete small bridges:
-- **`Z32P-DXCK-9N2G`** - only **2 contacts**, both hubs (*Miguel Medeiros*, *moon rock*) that don't
+- **`Z32P-DXCK-9N2G`** - only **2 contacts**, both hubs (*Hub Alpha*, *moon rock*) that don't
   follow each other: a textbook tiny broker.
 - **stagy** (12 contacts) and **BraveBrave…** (8) - each links several otherwise-unconnected hubs.
 

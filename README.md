@@ -16,8 +16,8 @@ The public instance is `https://nexus-scout.pubky.app`. No account, no API key.
 
 The quickest way to use it is to hand the URL to your AI agent:
 
-> Use https://nexus-scout.pubky.app and tell me how many friends John Carvalho has, and which
-> tag he used the most.
+> Use https://nexus-scout.pubky.app and tell me how many friends a given user has, and which
+> tag they used the most.
 
 The agent reads `https://nexus-scout.pubky.app/llms.txt` (the full usage guide: endpoints, result
 shapes, error codes, query patterns), writes its own Cypher, and answers. You can also query
